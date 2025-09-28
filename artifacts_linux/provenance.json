@@ -1,0 +1,7 @@
+{
+  "ts": "2025-09-28T11:19:34.196498+00:00",
+  "seed": 42,
+  "cwd": "/workspaces/TempoBench",
+  "python": "3.12.1 (main, Jul 10 2025, 11:57:50) [GCC 13.3.0]",
+  "cmdline": "/home/codespace/.python/current/bin/tembench run --config examples/sort_bench.yaml --out-dir artifacts_linux"
+}
