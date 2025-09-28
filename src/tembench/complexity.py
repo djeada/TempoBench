@@ -19,10 +19,11 @@ class FitResult:
     def predict(self, n_values: Iterable[float]) -> List[float]:
         # predict in original space: y = exp(a) * f(n)^b, but since we linearize as log y = a + b * log f(n)
         import math
-
+        basis = _basis_functions()[self.model]
         vals = []
         for n in n_values:
-            vals.append(math.exp(self.a + self.b * 1.0 * 1.0 * 1.0) * 1.0)  # placeholder, replaced below
+            fv = basis(n)
+            vals.append(math.exp(self.a + self.b * math.log(fv)))
         return vals
 
 
