@@ -73,3 +73,55 @@
 
 * A structured artifacts directory contains the config, raw runs, summaries, plots, and the report, and if omitted teammates hunt across machines; for example, centralized *artifacts* simplify attachment to PRs.
 * Clear numeric statuses communicate success, partial success with timeouts/skips, config errors, and runtime failures, and if omitted automation cannot act on results; for example, standardized *exit codes* let CI fail fast on performance regressions.
+
+## Quickstart
+
+This repository now includes a minimal, runnable scaffold of the TempoBench CLI.
+
+- Requirements: Python 3.10+ on Linux/macOS, with pip.
+- Install in editable mode:
+
+```
+pip install -e .
+```
+
+- Try the included example (parameter sweep over input size and data shape):
+
+```
+tembench run --config examples/sort_bench.yaml --out-dir artifacts
+tembench summarize --runs artifacts/runs.jsonl --out-csv artifacts/summary.csv
+tembench plot --summary artifacts/summary.csv --out-html artifacts/runtime.html
+```
+
+Artifacts are written under `artifacts/`:
+- `runs.jsonl`: raw per-trial results (status, wall_ms, peak_rss_mb, stderr/stdout)
+- `summary.csv`: medians/means and counts per grid point
+- `runtime.html`: an Altair plot of runtime vs `n`, colored by `impl`
+
+Notes:
+- CPU pinning is enabled in the example (`pin_cpu: 0`) when supported.
+- Warm-ups and repeats are configurable under `limits`.
+- The CLI also provides `inspect` to preview recent runs; `report` and `compare` are placeholders for future work.
+
+## Complexity fit overlay
+
+TempoBench can fit a Big-O class to observed runtimes and overlay it on the plot. Candidate models:
+
+- O(1), O(log n), O(n), O(n log n), O(n^2), O(n^3)
+
+The fitter linearizes in log space: log y = a + b log f(n) and selects the model with the lowest AIC.
+
+Usage:
+
+```
+tembench plot --summary artifacts/summary.csv --out-html artifacts/runtime.html --export-fits artifacts/fits.csv
+```
+
+Options:
+- `--no-fit` to disable the overlay
+- `--export-fits PATH` to save per-series parameters and AIC
+
+Limitations and tips:
+- Ensure `y` is positive; defaults to `wall_ms_median`.
+- Fits are per series (default by `impl`) and require at least two distinct n values.
+- The model is descriptive of observed scaling; insufficient span in `n` may be inconclusive.

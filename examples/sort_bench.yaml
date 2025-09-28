@@ -1,0 +1,16 @@
+benchmarks:
+  - name: py_sort
+    cmd: "python examples/sort_impl.py --n {n} --impl {impl}"
+    workdir: "."
+    env: {}
+
+grid:
+  n: [1000, 10000, 100000]
+  impl: ["random", "sorted", "reversed"]
+
+limits:
+  timeout_sec: 5
+  warmups: 1
+  repeats: 3
+
+pin_cpu: 0
