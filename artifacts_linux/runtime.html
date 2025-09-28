@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    #vis.vega-embed {
+      width: 100%;
+      display: flex;
+    }
+
+    #vis.vega-embed details,
+    #vis.vega-embed details summary {
+      position: relative;
+    }
+  </style>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/vega-lite@5.20.1"></script>
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+</head>
+<body>
+  <div id="vis"></div>
+  <script>
+    (function(vegaEmbed) {
+      var spec = {"config": {"view": {"continuousWidth": 300, "continuousHeight": 300}}, "layer": [{"data": {"name": "data-6756b2adbfaf5566f974b9f48e1eae19"}, "mark": {"type": "line", "point": true}, "encoding": {"color": {"field": "impl", "type": "nominal"}, "tooltip": [{"field": "bench", "type": "nominal"}, {"field": "impl", "type": "nominal"}, {"field": "n", "type": "quantitative"}, {"field": "wall_ms_median", "type": "quantitative"}, {"field": "wall_ms_mean", "type": "quantitative"}, {"field": "wall_ms_count", "type": "quantitative"}, {"field": "wall_ms_p10", "type": "quantitative"}, {"field": "wall_ms_p90", "type": "quantitative"}, {"field": "peak_rss_mb_median", "type": "quantitative"}, {"field": "peak_rss_mb_mean", "type": "quantitative"}, {"field": "ok", "type": "quantitative"}], "x": {"field": "n", "scale": {"type": "log"}, "title": "n", "type": "quantitative"}, "y": {"field": "wall_ms_median", "scale": {"type": "log"}, "title": "wall_ms_median", "type": "quantitative"}}}, {"data": {"name": "data-a2e56434c2b0b40bd3c5274097a678ff"}, "mark": {"type": "line", "strokeDash": [4, 4]}, "encoding": {"color": {"field": "impl", "type": "nominal"}, "detail": [{"field": "impl", "type": "nominal"}], "tooltip": [{"field": "impl", "type": "nominal"}, {"field": "model", "type": "nominal"}, {"field": "n", "type": "quantitative"}, {"field": "yhat", "type": "quantitative"}], "x": {"field": "n", "scale": {"type": "log"}, "title": "n", "type": "quantitative"}, "y": {"field": "yhat", "scale": {"type": "log"}, "title": "wall_ms_median", "type": "quantitative"}}}, {"data": {"name": "data-05e49b2642b94eb92cabd5538328c187"}, "mark": {"type": "text", "align": "left", "dx": 5}, "encoding": {"color": {"field": "impl", "type": "nominal"}, "detail": [{"field": "impl", "type": "nominal"}], "text": {"field": "model", "type": "nominal"}, "x": {"field": "n", "type": "quantitative"}, "y": {"field": "yhat", "type": "quantitative"}}}], "height": 400, "width": 600, "$schema": "https://vega.github.io/schema/vega-lite/v5.20.1.json", "datasets": {"data-6756b2adbfaf5566f974b9f48e1eae19": [{"bench": "py_sort", "impl": "random", "n": 1000, "wall_ms_median": 40.88, "wall_ms_mean": 46.80666666666667, "wall_ms_count": 3, "wall_ms_p10": 40.8368, "wall_ms_p90": 55.1472, "peak_rss_mb_median": 12.5, "peak_rss_mb_mean": 12.541666666666666, "ok": 3}, {"bench": "py_sort", "impl": "random", "n": 10000, "wall_ms_median": 53.894, "wall_ms_mean": 52.24633333333333, "wall_ms_count": 3, "wall_ms_p10": 45.13, "wall_ms_p90": 58.7036, "peak_rss_mb_median": 12.75, "peak_rss_mb_mean": 12.541666666666666, "ok": 3}, {"bench": "py_sort", "impl": "random", "n": 100000, "wall_ms_median": 76.469, "wall_ms_mean": 72.22066666666666, "wall_ms_count": 3, "wall_ms_p10": 65.889, "wall_ms_p90": 76.853, "peak_rss_mb_median": 16.504, "peak_rss_mb_mean": 16.543000000000003, "ok": 3}, {"bench": "py_sort", "impl": "reversed", "n": 1000, "wall_ms_median": 43.097, "wall_ms_mean": 42.772333333333336, "wall_ms_count": 3, "wall_ms_p10": 42.277, "wall_ms_p90": 43.137800000000006, "peak_rss_mb_median": 12.375, "peak_rss_mb_mean": 12.416666666666666, "ok": 3}, {"bench": "py_sort", "impl": "reversed", "n": 10000, "wall_ms_median": 40.8255, "wall_ms_mean": 40.8255, "wall_ms_count": 2, "wall_ms_p10": 40.7315, "wall_ms_p90": 40.9195, "peak_rss_mb_median": 12.25, "peak_rss_mb_mean": 12.25, "ok": 3}, {"bench": "py_sort", "impl": "reversed", "n": 100000, "wall_ms_median": 41.9725, "wall_ms_mean": 41.9725, "wall_ms_count": 2, "wall_ms_p10": 41.9497, "wall_ms_p90": 41.9953, "peak_rss_mb_median": 12.875, "peak_rss_mb_mean": 12.875, "ok": 3}, {"bench": "py_sort", "impl": "sorted", "n": 1000, "wall_ms_median": 41.86, "wall_ms_mean": 41.659333333333336, "wall_ms_count": 3, "wall_ms_p10": 41.3448, "wall_ms_p90": 41.8936, "peak_rss_mb_median": 12.375, "peak_rss_mb_mean": 12.375, "ok": 3}, {"bench": "py_sort", "impl": "sorted", "n": 10000, "wall_ms_median": 41.7605, "wall_ms_mean": 41.7605, "wall_ms_count": 2, "wall_ms_p10": 41.6049, "wall_ms_p90": 41.9161, "peak_rss_mb_median": 12.1875, "peak_rss_mb_mean": 12.1875, "ok": 3}, {"bench": "py_sort", "impl": "sorted", "n": 100000, "wall_ms_median": 41.656, "wall_ms_mean": 41.656, "wall_ms_count": 2, "wall_ms_p10": 41.4568, "wall_ms_p90": 41.8552, "peak_rss_mb_median": 12.5625, "peak_rss_mb_mean": 12.5625, "ok": 3}], "data-a2e56434c2b0b40bd3c5274097a678ff": [{"impl": "random", "n": 1000, "yhat": 40.38235510532427, "model": "O(n^3)"}, {"impl": "random", "n": 10000, "yhat": 55.23049115461474, "model": "O(n^3)"}, {"impl": "random", "n": 100000, "yhat": 75.53811919151272, "model": "O(n^3)"}, {"impl": "reversed", "n": 1000, "yhat": 42.60968185760987, "model": "O(log n)"}, {"impl": "reversed", "n": 10000, "yhat": 41.902256828193465, "model": "O(log n)"}, {"impl": "reversed", "n": 100000, "yhat": 41.361633677602654, "model": "O(log n)"}, {"impl": "sorted", "n": 1000, "yhat": 41.86087697958478, "model": "O(n)"}, {"impl": "sorted", "n": 10000, "yhat": 41.75875026492666, "model": "O(n)"}, {"impl": "sorted", "n": 100000, "yhat": 41.65687270572346, "model": "O(n)"}], "data-05e49b2642b94eb92cabd5538328c187": [{"impl": "random", "n": 100000, "yhat": 75.53811919151272, "model": "O(n^3)"}, {"impl": "reversed", "n": 100000, "yhat": 41.361633677602654, "model": "O(log n)"}, {"impl": "sorted", "n": 100000, "yhat": 41.65687270572346, "model": "O(n)"}]}};
+      var embedOpt = {"mode": "vega-lite"};
+
+      function showError(el, error){
+          el.innerHTML = ('<div style="color:red;">'
+                          + '<p>JavaScript Error: ' + error.message + '</p>'
+                          + "<p>This usually means there's a typo in your chart specification. "
+                          + "See the javascript console for the full traceback.</p>"
+                          + '</div>');
+          throw error;
+      }
+      const el = document.getElementById('vis');
+      vegaEmbed("#vis", spec, embedOpt)
+        .catch(error => showError(el, error));
+    })(vegaEmbed);
+
+  </script>
+</body>
+</html>

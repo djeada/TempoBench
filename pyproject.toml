@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tembench"
+version = "0.1.0"
+description = "Language-agnostic benchmarking orchestrator: run commands with sweeps, record metrics, summarize, and plot."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "TempoBench Contributors" }
+]
+dependencies = [
+  "typer>=0.9",
+  "PyYAML>=6.0",
+  "pandas>=2.0",
+  "altair>=5.0",
+  "psutil>=5.9",
+  "rich>=13.0"
+]
+
+[project.urls]
+Homepage = "https://github.com/djeada/TempoBench"
+
+[project.scripts]
+tembench = "tembench.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
