@@ -35,13 +35,6 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
     # Outlier filtering (Tukey)
     ok = df[df["status"] == "ok"] if "status" in df.columns else df
     if not include_outliers and not ok.empty and "wall_ms" in ok.columns:
-        def filter_group(g: pd.DataFrame) -> pd.DataFrame:
-            q1 = g["wall_ms"].quantile(0.25)
-            q3 = g["wall_ms"].quantile(0.75)
-            iqr = q3 - q1
-            lower = q1 - 1.5 * iqr
-            upper = q3 + 1.5 * iqr
-            return g[(g["wall_ms"] >= lower) & (g["wall_ms"] <= upper)]
         # apply per grouping of bench/impl/n (n excluded for per-point filtering)
     keys = [c for c in group_cols if c != "n"]
     # Compute per-group bounds via transform to avoid deprecated GroupBy.apply semantics
