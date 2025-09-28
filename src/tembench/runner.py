@@ -44,43 +44,44 @@ def run_once(cmd: str, env: Dict[str, str], cwd: Path | None, timeout: float | N
     try:
         with tempfile.NamedTemporaryFile(mode="w+", delete=False) as out_f, tempfile.NamedTemporaryFile(mode="w+", delete=False) as err_f:
             out_path, err_path = out_f.name, err_f.name
-        with subprocess.Popen(
-            shlex.split(cmd),
-            cwd=str(cwd) if cwd else None,
-            env={**os.environ, **env},
-            stdout=open(out_path, "w"),
-            stderr=open(err_path, "w"),
-            text=True,
-            preexec_fn=os.setsid,
-        ) as proc:
-            p = psutil.Process(proc.pid)
-            # sample memory periodically to avoid tight loops; check for timeout
-            while True:
-                if timeout is not None and (time.perf_counter() - start) > timeout:
-                    status = "timeout"
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                    except Exception:
-                        pass
-                    try:
-                        proc.wait(2)
-                    except subprocess.TimeoutExpired:
+        with open(out_path, "w") as out_handle, open(err_path, "w") as err_handle:
+            with subprocess.Popen(
+                shlex.split(cmd),
+                cwd=str(cwd) if cwd else None,
+                env={**os.environ, **env},
+                stdout=out_handle,
+                stderr=err_handle,
+                text=True,
+                preexec_fn=os.setsid,
+            ) as proc:
+                p = psutil.Process(proc.pid)
+                # sample memory periodically to avoid tight loops; check for timeout
+                while True:
+                    if timeout is not None and (time.perf_counter() - start) > timeout:
+                        status = "timeout"
                         try:
-                            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
                         except Exception:
                             pass
-                    break
-                # Track peak RSS for the process tree
-                try:
-                    procs = [p] + p.children(recursive=True)
-                    rss = sum(ch.memory_info().rss for ch in procs if ch.is_running())
-                    peak_rss = max(peak_rss, rss)
-                except psutil.Error:
-                    pass
-                if proc.poll() is not None:
-                    break
-                time.sleep(0.01)
-            rc = proc.returncode
+                        try:
+                            proc.wait(2)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                            except Exception:
+                                pass
+                        break
+                    # Track peak RSS for the process tree
+                    try:
+                        procs = [p] + p.children(recursive=True)
+                        rss = sum(ch.memory_info().rss for ch in procs if ch.is_running())
+                        peak_rss = max(peak_rss, rss)
+                    except psutil.Error:
+                        pass
+                    if proc.poll() is not None:
+                        break
+                    time.sleep(0.01)
+                rc = proc.returncode
         # read tail of outputs
         stdout_data = Path(out_path).read_text()[-10000:]
         stderr_data = Path(err_path).read_text()[-10000:]
