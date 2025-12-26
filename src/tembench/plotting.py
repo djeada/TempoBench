@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 import altair as alt
 import pandas as pd
@@ -187,8 +188,6 @@ def plot_boxplot(
     y: str = "wall_ms",
 ) -> alt.Chart:
     """Create a boxplot from raw JSONL runs to show distribution."""
-    import json
-    
     rows = []
     with runs_jsonl.open() as f:
         for line in f:
@@ -319,32 +318,35 @@ def save_chart(
     chart: alt.Chart,
     output_path: Path,
     format: str = "html",
-) -> None:
+) -> str:
     """Save chart to various formats.
     
     Args:
         chart: Altair chart to save
         output_path: Path to save the chart
         format: Output format - 'html', 'json', 'png', 'svg'
+        
+    Returns:
+        Path to the saved file (may differ from output_path if fallback was used)
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     if format == "html":
         chart.save(output_path)
+        return str(output_path)
     elif format == "json":
         with open(output_path, "w") as f:
             f.write(chart.to_json())
+        return str(output_path)
     elif format in ("png", "svg"):
         # These require additional dependencies (altair_saver or vl-convert)
         try:
             chart.save(output_path, format=format)
-        except Exception as e:
+            return str(output_path)
+        except Exception:
             # Fall back to HTML if PNG/SVG export fails
             html_path = output_path.with_suffix(".html")
             chart.save(html_path)
-            raise ValueError(
-                f"Could not save as {format}. Saved as HTML instead at {html_path}. "
-                f"For {format} export, install: pip install vl-convert-python"
-            ) from e
+            return str(html_path)
     else:
         raise ValueError(f"Unsupported format: {format}. Use 'html', 'json', 'png', or 'svg'.")
