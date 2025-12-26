@@ -36,16 +36,17 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
     ok = df[df["status"] == "ok"] if "status" in df.columns else df
     if not include_outliers and not ok.empty and "wall_ms" in ok.columns:
         # apply per grouping of bench/impl/n (n excluded for per-point filtering)
-    keys = [c for c in group_cols if c != "n"]
-    # Compute per-group bounds via transform to avoid deprecated GroupBy.apply semantics
-    gb = ok.groupby(keys, dropna=False)
-    q1 = gb["wall_ms"].transform(lambda s: s.quantile(0.25))
-    q3 = gb["wall_ms"].transform(lambda s: s.quantile(0.75))
-    iqr = q3 - q1
-    lower = q1 - 1.5 * iqr
-    upper = q3 + 1.5 * iqr
-    mask = (ok["wall_ms"] >= lower) & (ok["wall_ms"] <= upper)
-    ok = ok[mask]
+        keys = [c for c in group_cols if c != "n"]
+        if keys:
+            # Compute per-group bounds via transform to avoid deprecated GroupBy.apply semantics
+            gb = ok.groupby(keys, dropna=False)
+            q1 = gb["wall_ms"].transform(lambda s: s.quantile(0.25))
+            q3 = gb["wall_ms"].transform(lambda s: s.quantile(0.75))
+            iqr = q3 - q1
+            lower = q1 - 1.5 * iqr
+            upper = q3 + 1.5 * iqr
+            mask = (ok["wall_ms"] >= lower) & (ok["wall_ms"] <= upper)
+            ok = ok[mask]
     def q(x, p):
         return x.quantile(p)
     agg = {
