@@ -35,8 +35,9 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
     # Outlier filtering (Tukey)
     ok = df[df["status"] == "ok"] if "status" in df.columns else df
     if not include_outliers and not ok.empty and "wall_ms" in ok.columns:
-        # apply per grouping of bench/impl/n (n excluded for per-point filtering)
-        keys = [c for c in group_cols if c != "n"]
+        # Apply per exact grid point (e.g. bench/impl/n), so larger n values are not
+        # incorrectly removed as "outliers" relative to smaller input sizes.
+        keys = list(group_cols)
         if keys:
             # Compute per-group bounds via transform to avoid deprecated GroupBy.apply semantics
             gb = ok.groupby(keys, dropna=False)
@@ -47,24 +48,21 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
             upper = q3 + 1.5 * iqr
             mask = (ok["wall_ms"] >= lower) & (ok["wall_ms"] <= upper)
             ok = ok[mask]
-    def q(x, p):
-        return x.quantile(p)
+    def p10(s: pd.Series) -> float:
+        return s.quantile(0.1)
+
+    def p90(s: pd.Series) -> float:
+        return s.quantile(0.9)
+
+    p10.__name__ = "p10"
+    p90.__name__ = "p90"
+
     agg = {
-        "wall_ms": ["median", "mean", "count", (lambda s: q(s, 0.1)), (lambda s: q(s, 0.9))],
+        "wall_ms": ["median", "mean", "count", p10, p90],
         "peak_rss_mb": ["median", "mean"],
     }
     g = ok.groupby(group_cols, dropna=False).agg(agg)
-    # flatten columns
-    g.columns = [
-        "_".join([a for a in col if a]) for col in g.columns.to_flat_index()
-    ]
-    # Fix lambda names into percentiles
-    g = g.rename(columns={
-        "wall_ms_<lambda_0>": "wall_ms_p10",
-        "wall_ms_<lambda_1>": "wall_ms_p90",
-        "peak_rss_mb_median": "peak_rss_mb_median",
-        "peak_rss_mb_mean": "peak_rss_mb_mean",
-    })
+    g.columns = ["_".join(col) for col in g.columns.to_flat_index()]
     g = g.reset_index()
     # add counts of failures
     if "status" in df.columns:

@@ -5,11 +5,11 @@ benchmarks:
     env: {}
 
 grid:
-  n: [1000, 10000, 100000]
+  n: [10000, 50000, 100000, 500000, 1000000, 5000000]
   impl: ["random", "sorted", "reversed"]
 
 limits:
-  timeout_sec: 5
+  timeout_sec: 30
   warmups: 1
   repeats: 3
 
