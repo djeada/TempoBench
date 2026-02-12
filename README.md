@@ -1,6 +1,6 @@
 # TempoBench
 
-A language-agnostic benchmarking CLI that runs any shell command with parameter sweeps, records wall-time and memory, estimates Big-O complexity, and generates reports—all from a single YAML config.
+A language-agnostic benchmarking CLI that runs any shell command with parameter sweeps, records wall-time and memory, estimates Big-O complexity, and generates reports, all from a single YAML config.
 
 ## Features
 
