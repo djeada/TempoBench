@@ -398,6 +398,52 @@ body {
 
 
 # ---------------------------------------------------------------------------
+# Theme toggle JavaScript
+# ---------------------------------------------------------------------------
+
+_THEME_TOGGLE_HTML = """\
+  <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+    <span class="theme-toggle-icon" id="themeIcon">🌙</span>
+    <span id="themeLabel">Dark</span>
+  </button>
+
+  <script>
+    (function() {{
+      const toggle = document.getElementById('themeToggle');
+      const icon = document.getElementById('themeIcon');
+      const label = document.getElementById('themeLabel');
+      const html = document.documentElement;
+
+      // Check for saved theme preference or default to light mode
+      const currentTheme = localStorage.getItem('theme') || 'light';
+      html.setAttribute('data-theme', currentTheme);
+
+      // Update button state
+      if (currentTheme === 'dark') {{
+        icon.textContent = '☀️';
+        label.textContent = 'Light';
+      }}
+
+      toggle.addEventListener('click', function() {{
+        const theme = html.getAttribute('data-theme');
+        const newTheme = theme === 'light' ? 'dark' : 'light';
+
+        html.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+
+        if (newTheme === 'dark') {{
+          icon.textContent = '☀️';
+          label.textContent = 'Light';
+        }} else {{
+          icon.textContent = '🌙';
+          label.textContent = 'Dark';
+        }}
+      }});
+    }})();
+  </script>"""
+
+
+# ---------------------------------------------------------------------------
 # Main report
 # ---------------------------------------------------------------------------
 
@@ -554,45 +600,7 @@ def generate_report(
 
   </div>
 
-  <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
-    <span class="theme-toggle-icon" id="themeIcon">🌙</span>
-    <span id="themeLabel">Dark</span>
-  </button>
-
-  <script>
-    (function() {{
-      const toggle = document.getElementById('themeToggle');
-      const icon = document.getElementById('themeIcon');
-      const label = document.getElementById('themeLabel');
-      const html = document.documentElement;
-
-      // Check for saved theme preference or default to light mode
-      const currentTheme = localStorage.getItem('theme') || 'light';
-      html.setAttribute('data-theme', currentTheme);
-
-      // Update button state
-      if (currentTheme === 'dark') {{
-        icon.textContent = '☀️';
-        label.textContent = 'Light';
-      }}
-
-      toggle.addEventListener('click', function() {{
-        const theme = html.getAttribute('data-theme');
-        const newTheme = theme === 'light' ? 'dark' : 'light';
-
-        html.setAttribute('data-theme', newTheme);
-        localStorage.setItem('theme', newTheme);
-
-        if (newTheme === 'dark') {{
-          icon.textContent = '☀️';
-          label.textContent = 'Light';
-        }} else {{
-          icon.textContent = '🌙';
-          label.textContent = 'Dark';
-        }}
-      }});
-    }})();
-  </script>
+{_THEME_TOGGLE_HTML}
 </body>
 </html>"""
 
@@ -746,45 +754,7 @@ def generate_comparison_report(
 
   </div>
 
-  <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
-    <span class="theme-toggle-icon" id="themeIcon">🌙</span>
-    <span id="themeLabel">Dark</span>
-  </button>
-
-  <script>
-    (function() {{
-      const toggle = document.getElementById('themeToggle');
-      const icon = document.getElementById('themeIcon');
-      const label = document.getElementById('themeLabel');
-      const html = document.documentElement;
-
-      // Check for saved theme preference or default to light mode
-      const currentTheme = localStorage.getItem('theme') || 'light';
-      html.setAttribute('data-theme', currentTheme);
-
-      // Update button state
-      if (currentTheme === 'dark') {{
-        icon.textContent = '☀️';
-        label.textContent = 'Light';
-      }}
-
-      toggle.addEventListener('click', function() {{
-        const theme = html.getAttribute('data-theme');
-        const newTheme = theme === 'light' ? 'dark' : 'light';
-
-        html.setAttribute('data-theme', newTheme);
-        localStorage.setItem('theme', newTheme);
-
-        if (newTheme === 'dark') {{
-          icon.textContent = '☀️';
-          label.textContent = 'Light';
-        }} else {{
-          icon.textContent = '🌙';
-          label.textContent = 'Dark';
-        }}
-      }});
-    }})();
-  </script>
+{_THEME_TOGGLE_HTML}
 </body>
 </html>"""
 
