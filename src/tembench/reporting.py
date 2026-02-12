@@ -146,8 +146,26 @@ _CSS = """\
   --radius: 12px;
   --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
   --shadow-md: 0 4px 6px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
+  --shadow-lg: 0 8px 12px rgba(0,0,0,.15);
   --font: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+}
+
+[data-theme="dark"] {
+  --c-blue: #3b82f6;
+  --c-blue-dark: #2563eb;
+  --c-green: #22c55e;
+  --c-amber: #fbbf24;
+  --c-red: #ef4444;
+  --c-bg: #0f172a;
+  --c-surface: #1e293b;
+  --c-text: #f1f5f9;
+  --c-text2: #cbd5e1;
+  --c-text3: #64748b;
+  --c-border: #334155;
+  --shadow: 0 1px 3px rgba(0,0,0,.3), 0 1px 2px rgba(0,0,0,.2);
+  --shadow-md: 0 4px 6px rgba(0,0,0,.3), 0 2px 4px rgba(0,0,0,.2);
+  --shadow-lg: 0 8px 12px rgba(0,0,0,.4);
 }
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -267,6 +285,7 @@ body {
 }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr:hover { background: #f1f5f9; }
+[data-theme="dark"] .data-table tbody tr:hover { background: #334155; }
 .data-table td.highlight {
   font-weight: 600;
   font-family: var(--font-mono);
@@ -329,6 +348,14 @@ body {
 }
 .data-table td.regression  { background: #fef2f2; color: var(--c-red);   font-weight: 600; }
 .data-table td.improvement { background: #f0fdf4; color: var(--c-green); font-weight: 600; }
+[data-theme="dark"] .data-table td.regression  { background: #4c1d1d; color: #fca5a5; }
+[data-theme="dark"] .data-table td.improvement { background: #14532d; color: #86efac; }
+[data-theme="dark"] .status-banner.pass {
+  background: #14532d; color: #86efac;
+}
+[data-theme="dark"] .status-banner.fail {
+  background: #4c1d1d; color: #fca5a5;
+}
 
 /* ---- Responsive ---- */
 @media (max-width: 640px) {
@@ -337,7 +364,85 @@ body {
   .report-header h1 { font-size: 1.5rem; }
   .stat-card .stat-value { font-size: 1.3rem; }
 }
+
+/* ---- Theme Toggle ---- */
+.theme-toggle {
+  position: fixed;
+  top: 1.5rem;
+  right: 1.5rem;
+  background: var(--c-surface);
+  border: 2px solid var(--c-border);
+  border-radius: 50px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-size: 1.2rem;
+  box-shadow: var(--shadow-md);
+  transition: all 0.3s ease;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: var(--c-text);
+}
+.theme-toggle:hover {
+  transform: scale(1.05);
+  box-shadow: var(--shadow-lg);
+}
+.theme-toggle-icon {
+  font-size: 1.3rem;
+  transition: transform 0.3s ease;
+}
+.theme-toggle:active .theme-toggle-icon {
+  transform: rotate(180deg);
+}
 """
+
+
+# ---------------------------------------------------------------------------
+# Theme toggle JavaScript
+# ---------------------------------------------------------------------------
+
+_THEME_TOGGLE_HTML = """\
+  <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+    <span class="theme-toggle-icon" id="themeIcon">🌙</span>
+    <span id="themeLabel">Dark</span>
+  </button>
+
+  <script>
+    (function() {{
+      const toggle = document.getElementById('themeToggle');
+      const icon = document.getElementById('themeIcon');
+      const label = document.getElementById('themeLabel');
+      const html = document.documentElement;
+
+      // Check for saved theme preference or default to light mode
+      const currentTheme = localStorage.getItem('theme') || 'light';
+      html.setAttribute('data-theme', currentTheme);
+
+      // Update button state
+      if (currentTheme === 'dark') {{
+        icon.textContent = '☀️';
+        label.textContent = 'Light';
+      }}
+
+      toggle.addEventListener('click', function() {{
+        const theme = html.getAttribute('data-theme');
+        const newTheme = theme === 'light' ? 'dark' : 'light';
+
+        html.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+
+        if (newTheme === 'dark') {{
+          icon.textContent = '☀️';
+          label.textContent = 'Light';
+        }} else {{
+          icon.textContent = '🌙';
+          label.textContent = 'Dark';
+        }}
+      }});
+    }})();
+  </script>"""
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +601,8 @@ def generate_report(
     </div>
 
   </div>
+
+{_THEME_TOGGLE_HTML}
 </body>
 </html>"""
 
@@ -648,6 +755,8 @@ def generate_comparison_report(
     </div>
 
   </div>
+
+{_THEME_TOGGLE_HTML}
 </body>
 </html>"""
 
