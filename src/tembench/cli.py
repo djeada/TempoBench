@@ -370,6 +370,8 @@ def dashboard(
     color: str = typer.Option("impl", help="Series grouping column"),
     output: Path = typer.Option(Path("artifacts/dashboard.html"), help="Output path for dashboard"),
     title: str = typer.Option("TempoBench Dashboard", help="Dashboard title"),
+    log_x: bool = typer.Option(False, help="Use log scale for X axis"),
+    log_y: bool = typer.Option(False, help="Use log scale for Y axis"),
 ):
     """Generate an interactive dashboard with multiple charts.
 
@@ -397,6 +399,8 @@ def dashboard(
         x=x,
         color=color,
         title=title,
+        log_x=log_x,
+        log_y=log_y,
     )
 
     output.parent.mkdir(parents=True, exist_ok=True)

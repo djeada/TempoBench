@@ -533,15 +533,17 @@ def create_dashboard(
     x: str = "n",
     color: str = "impl",
     title: str = "TempoBench Dashboard",
+    log_x: bool = False,
+    log_y: bool = False,
 ) -> alt.VConcatChart:
     """Create a multi-chart dashboard."""
     df = pd.read_csv(summary_csv)
     charts: list[alt.Chart] = []
 
-    charts.append(plot_runtime(summary_csv, x=x, color=color, show_fit=True))
+    charts.append(plot_runtime(summary_csv, x=x, color=color, show_fit=True, log_x=log_x, log_y=log_y))
 
     if "peak_rss_mb_median" in df.columns or "peak_rss_mb_mean" in df.columns:
-        charts.append(plot_memory(summary_csv, x=x, color=color))
+        charts.append(plot_memory(summary_csv, x=x, color=color, log_x=log_x, log_y=log_y))
 
     if color in df.columns and x in df.columns:
         charts.append(plot_heatmap(summary_csv, x=x, y=color))
