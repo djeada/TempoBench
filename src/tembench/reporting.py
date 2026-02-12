@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -33,72 +34,315 @@ def get_system_info() -> dict:
     return info
 
 
-def _generate_summary_table_html(df: pd.DataFrame) -> str:
-    """Generate an HTML table from the summary DataFrame."""
+# ---------------------------------------------------------------------------
+# Column display names for tables
+# ---------------------------------------------------------------------------
+
+_COL_LABELS = {
+    "bench": "Benchmark",
+    "impl": "Impl",
+    "n": "n",
+    "wall_ms_median": "Time Med (ms)",
+    "wall_ms_mean": "Time Mean (ms)",
+    "wall_ms_count": "Runs",
+    "wall_ms_p10": "Time P10 (ms)",
+    "wall_ms_p90": "Time P90 (ms)",
+    "peak_rss_mb_median": "RSS Med (MB)",
+    "peak_rss_mb_mean": "RSS Mean (MB)",
+    "ok": "OK",
+    "model": "Complexity",
+    "C": "C",
+    "C_ols": "C (OLS)",
+    "baseline": "Baseline",
+    "offset": "Offset",
+    "formula": "Upper Bound",
+
+    "rss": "RSS",
+    "nobs": "Obs",
+}
+
+
+def _col_label(col: str) -> str:
+    return _COL_LABELS.get(col, col)
+
+
+def _fmt_val(val, col: str) -> str:
+    """Format a cell value depending on its type and column name."""
+    if pd.isna(val):
+        return '<span class="na">—</span>'
+    if isinstance(val, float):
+        if "pct" in col:
+            return f"{val:.1f}%"
+        if abs(val) >= 100:
+            return f"{val:,.1f}"
+        if abs(val) >= 1:
+            return f"{val:.3f}"
+        return f"{val:.3e}"
+    return str(val)
+
+
+# ---------------------------------------------------------------------------
+# HTML building blocks
+# ---------------------------------------------------------------------------
+
+def _table_html(df: pd.DataFrame, cls: str = "data-table", highlight_col: str | None = None) -> str:
+    """Render a DataFrame as a styled HTML table."""
     if df.empty:
-        return "<p>No summary data available.</p>"
-    
-    html = ['<table class="summary-table">']
-    html.append('<thead><tr>')
+        return '<p class="empty-msg">No data available.</p>'
+
+    h = [f'<div class="table-wrap"><table class="{cls}">']
+    h.append("<thead><tr>")
     for col in df.columns:
-        html.append(f'<th>{col}</th>')
-    html.append('</tr></thead>')
-    html.append('<tbody>')
+        h.append(f"<th>{_col_label(col)}</th>")
+    h.append("</tr></thead><tbody>")
+
     for _, row in df.iterrows():
-        html.append('<tr>')
+        h.append("<tr>")
         for col in df.columns:
             val = row[col]
-            if isinstance(val, float):
-                html.append(f'<td>{val:.3f}</td>')
-            else:
-                html.append(f'<td>{val}</td>')
-        html.append('</tr>')
-    html.append('</tbody></table>')
-    return '\n'.join(html)
+            css = ""
+            if highlight_col and col == highlight_col:
+                css = ' class="highlight"'
+            h.append(f"<td{css}>{_fmt_val(val, col)}</td>")
+        h.append("</tr>")
+
+    h.append("</tbody></table></div>")
+    return "\n".join(h)
 
 
-def _generate_stats_cards(df: pd.DataFrame) -> str:
-    """Generate statistics cards for the report."""
-    cards = []
-    
-    if 'wall_ms_median' in df.columns:
-        fastest = df['wall_ms_median'].min()
-        slowest = df['wall_ms_median'].max()
-        avg = df['wall_ms_median'].mean()
-        cards.append(f'''
-        <div class="stat-card">
-            <div class="stat-value">{fastest:.2f}ms</div>
-            <div class="stat-label">Fastest</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-value">{slowest:.2f}ms</div>
-            <div class="stat-label">Slowest</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-value">{avg:.2f}ms</div>
-            <div class="stat-label">Average</div>
-        </div>
-        ''')
-    
-    if 'peak_rss_mb_median' in df.columns:
-        max_mem = df['peak_rss_mb_median'].max()
-        cards.append(f'''
-        <div class="stat-card">
-            <div class="stat-value">{max_mem:.2f}MB</div>
-            <div class="stat-label">Peak Memory</div>
-        </div>
-        ''')
-    
-    total_runs = len(df)
-    cards.append(f'''
-    <div class="stat-card">
-        <div class="stat-value">{total_runs}</div>
-        <div class="stat-label">Total Configurations</div>
-    </div>
-    ''')
-    
-    return '\n'.join(cards)
+def _stat_card(value: str, label: str, variant: str = "") -> str:
+    cls = f"stat-card {variant}".strip()
+    return f'<div class="{cls}"><div class="stat-value">{value}</div><div class="stat-label">{label}</div></div>'
 
+
+def _extract_vega_spec(chart_html_text: str) -> str | None:
+    """Extract the Vega-Lite JSON spec from an Altair-generated HTML file.
+
+    Returns the spec as a string, or None if not found.
+    """
+    m = re.search(r'var\s+spec\s*=\s*(\{.*?\});\s*\n', chart_html_text, re.DOTALL)
+    if m:
+        return m.group(1)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Shared CSS
+# ---------------------------------------------------------------------------
+
+_CSS = """\
+:root {
+  --c-blue: #2563eb;
+  --c-blue-dark: #1d4ed8;
+  --c-green: #16a34a;
+  --c-amber: #d97706;
+  --c-red: #dc2626;
+  --c-bg: #f8fafc;
+  --c-surface: #ffffff;
+  --c-text: #0f172a;
+  --c-text2: #475569;
+  --c-text3: #94a3b8;
+  --c-border: #e2e8f0;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-md: 0 4px 6px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
+  --font: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+}
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font);
+  background: var(--c-bg);
+  color: var(--c-text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.container { max-width: 1100px; margin: 0 auto; padding: 2.5rem 1.5rem; }
+
+/* ---- Header ---- */
+.report-header {
+  background: linear-gradient(135deg, var(--c-blue) 0%, var(--c-blue-dark) 100%);
+  color: #fff;
+  padding: 2.5rem 2rem;
+  border-radius: var(--radius);
+  margin-bottom: 2rem;
+  text-align: center;
+}
+.report-header h1 {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.35rem;
+}
+.report-header .meta {
+  opacity: 0.85;
+  font-size: 0.95rem;
+}
+
+/* ---- Sections ---- */
+.section {
+  background: var(--c-surface);
+  border-radius: var(--radius);
+  padding: 1.75rem;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow);
+}
+.section h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--c-text);
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.section h2 .icon { font-size: 1.25rem; }
+.section p.desc {
+  color: var(--c-text2);
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+/* ---- Stat cards ---- */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+}
+.stat-card {
+  background: var(--c-bg);
+  border-radius: 10px;
+  padding: 1.25rem 1rem;
+  text-align: center;
+  border: 1px solid var(--c-border);
+  transition: box-shadow .15s;
+}
+.stat-card:hover { box-shadow: var(--shadow-md); }
+.stat-card .stat-value {
+  font-size: 1.65rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--c-text);
+}
+.stat-card .stat-label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--c-text3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 0.2rem;
+}
+.stat-card.ok    { border-left: 4px solid var(--c-green); }
+.stat-card.warn  { border-left: 4px solid var(--c-amber); }
+.stat-card.err   { border-left: 4px solid var(--c-red);   }
+
+/* ---- Tables ---- */
+.table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--c-border); }
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.data-table th {
+  background: var(--c-bg);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-text2);
+  padding: 0.7rem 0.85rem;
+  text-align: left;
+  position: sticky;
+  top: 0;
+  border-bottom: 2px solid var(--c-border);
+}
+.data-table td {
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--c-border);
+  font-variant-numeric: tabular-nums;
+}
+.data-table tbody tr:last-child td { border-bottom: none; }
+.data-table tbody tr:hover { background: #f1f5f9; }
+.data-table td.highlight {
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+}
+.data-table .na { color: var(--c-text3); }
+
+/* ---- Chart ---- */
+.chart-container {
+  display: flex;
+  justify-content: center;
+  padding: 0.5rem 0;
+}
+.chart-container .vega-embed {
+  width: 100% !important;
+}
+.chart-container .vega-embed details { display: none; }
+
+/* ---- System info ---- */
+.sysinfo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0 2rem;
+}
+.sysinfo-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.55rem 0;
+  border-bottom: 1px dashed var(--c-border);
+  font-size: 0.88rem;
+}
+.sysinfo-row:last-child { border-bottom: none; }
+.sysinfo-key { color: var(--c-text2); }
+.sysinfo-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---- Footer ---- */
+.report-footer {
+  text-align: center;
+  padding: 2rem 0 1rem;
+  color: var(--c-text3);
+  font-size: 0.8rem;
+}
+.report-footer a { color: var(--c-blue); text-decoration: none; }
+.report-footer a:hover { text-decoration: underline; }
+
+/* ---- Comparison-specific ---- */
+.status-banner {
+  padding: 1rem 1.5rem;
+  border-radius: var(--radius);
+  margin-bottom: 1.5rem;
+  text-align: center;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+.status-banner.pass {
+  background: #f0fdf4; color: var(--c-green); border: 2px solid var(--c-green);
+}
+.status-banner.fail {
+  background: #fef2f2; color: var(--c-red); border: 2px solid var(--c-red);
+}
+.data-table td.regression  { background: #fef2f2; color: var(--c-red);   font-weight: 600; }
+.data-table td.improvement { background: #f0fdf4; color: var(--c-green); font-weight: 600; }
+
+/* ---- Responsive ---- */
+@media (max-width: 640px) {
+  .container { padding: 1rem; }
+  .report-header { padding: 2rem 1rem; }
+  .report-header h1 { font-size: 1.5rem; }
+  .stat-card .stat-value { font-size: 1.3rem; }
+}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Main report
+# ---------------------------------------------------------------------------
 
 def generate_report(
     summary_csv: Path,
@@ -108,58 +352,23 @@ def generate_report(
     title: str = "TempoBench Report",
     output_path: Optional[Path] = None,
 ) -> str:
-    """Generate a comprehensive HTML report.
-    
-    Args:
-        summary_csv: Path to summary CSV file
-        runs_jsonl: Optional path to raw JSONL runs
-        fits_csv: Optional path to complexity fits CSV
-        chart_html: Optional path to pre-generated chart HTML
-        title: Report title
-        output_path: If provided, save the report to this path
-        
-    Returns:
-        The generated HTML as a string
-    """
+    """Generate a comprehensive HTML report."""
     df = pd.read_csv(summary_csv)
-    system_info = get_system_info()
-    
-    # Load fits if available
-    fits_html = ""
-    if fits_csv and fits_csv.exists():
-        fits_df = pd.read_csv(fits_csv)
-        fits_html = f'''
-        <section class="fits-section">
-            <h2>Complexity Analysis</h2>
-            <p>Best-fit complexity models determined via AIC selection:</p>
-            {_generate_summary_table_html(fits_df)}
-        </section>
-        '''
-    
-    # Load chart if available
-    chart_embed = ""
-    if chart_html and chart_html.exists():
-        chart_content = chart_html.read_text()
-        # Extract just the vegaEmbed part if it's a full HTML
-        if '<script>' in chart_content and 'vegaEmbed' in chart_content:
-            chart_embed = f'''
-            <section class="chart-section">
-                <h2>Performance Charts</h2>
-                <div id="vis-container">
-                    {chart_content}
-                </div>
-            </section>
-            '''
-        else:
-            chart_embed = f'''
-            <section class="chart-section">
-                <h2>Performance Charts</h2>
-                <iframe src="{chart_html.name}" style="width:100%;height:500px;border:none;"></iframe>
-            </section>
-            '''
-    
-    # Generate raw runs summary if available
-    runs_summary = ""
+    sysinfo = get_system_info()
+
+    # ---- overview cards ----
+    cards = []
+    if "wall_ms_median" in df.columns:
+        cards.append(_stat_card(f"{df['wall_ms_median'].min():.1f} ms", "Fastest"))
+        cards.append(_stat_card(f"{df['wall_ms_median'].max():.1f} ms", "Slowest"))
+        cards.append(_stat_card(f"{df['wall_ms_median'].mean():.1f} ms", "Average"))
+    if "peak_rss_mb_median" in df.columns:
+        cards.append(_stat_card(f"{df['peak_rss_mb_median'].max():.1f} MB", "Peak Memory"))
+    cards.append(_stat_card(str(len(df)), "Configurations"))
+    overview_cards = "\n".join(cards)
+
+    # ---- run statistics ----
+    runs_section = ""
     if runs_jsonl and runs_jsonl.exists():
         rows = []
         with runs_jsonl.open() as f:
@@ -169,358 +378,178 @@ def generate_report(
                 except json.JSONDecodeError:
                     continue
         if rows:
-            total_runs = len(rows)
-            ok_count = sum(1 for r in rows if r.get('status') == 'ok')
-            failed_count = sum(1 for r in rows if r.get('status') == 'failed')
-            timeout_count = sum(1 for r in rows if r.get('status') == 'timeout')
-            runs_summary = f'''
-            <section class="runs-summary">
-                <h2>Run Statistics</h2>
-                <div class="stat-cards">
-                    <div class="stat-card success">
-                        <div class="stat-value">{ok_count}</div>
-                        <div class="stat-label">Successful</div>
-                    </div>
-                    <div class="stat-card warning">
-                        <div class="stat-value">{timeout_count}</div>
-                        <div class="stat-label">Timeouts</div>
-                    </div>
-                    <div class="stat-card error">
-                        <div class="stat-value">{failed_count}</div>
-                        <div class="stat-label">Failed</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value">{total_runs}</div>
-                        <div class="stat-label">Total Runs</div>
-                    </div>
-                </div>
-            </section>
-            '''
-    
-    html = f'''<!DOCTYPE html>
+            ok = sum(1 for r in rows if r.get("status") == "ok")
+            fail = sum(1 for r in rows if r.get("status") == "failed")
+            tout = sum(1 for r in rows if r.get("status") == "timeout")
+            runs_section = f"""
+    <div class="section">
+      <h2><span class="icon">🏃</span> Run Statistics</h2>
+      <div class="stat-grid">
+        {_stat_card(str(ok), 'Successful', 'ok')}
+        {_stat_card(str(tout), 'Timeouts', 'warn')}
+        {_stat_card(str(fail), 'Failed', 'err')}
+        {_stat_card(str(len(rows)), 'Total Runs', '')}
+      </div>
+    </div>"""
+
+    # ---- chart embed ----
+    chart_section = ""
+    if chart_html and chart_html.exists():
+        raw = chart_html.read_text()
+        spec_json = _extract_vega_spec(raw)
+        if spec_json:
+            chart_section = f"""
+    <div class="section">
+      <h2><span class="icon">📊</span> Performance Charts</h2>
+      <div class="chart-container"><div id="vis"></div></div>
+      <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+      <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+      <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+      <script>vegaEmbed('#vis', {spec_json}, {{renderer:'svg',actions:false}});</script>
+    </div>"""
+        else:
+            chart_section = f"""
+    <div class="section">
+      <h2><span class="icon">📊</span> Performance Charts</h2>
+      <iframe src="{chart_html.name}" style="width:100%;height:520px;border:none;border-radius:8px;"></iframe>
+    </div>"""
+
+    # ---- fits table ----
+    fits_section = ""
+    if fits_csv and fits_csv.exists():
+        fits_df = pd.read_csv(fits_csv)
+        if not fits_df.empty:
+            fits_section = f"""
+    <div class="section">
+      <h2><span class="icon">📐</span> Complexity Analysis</h2>
+      <p class="desc">Best-fit Big-O complexity class per implementation, selected via AIC.
+        The upper-bound curve satisfies T(n) ≤ C·f(n) + baseline for all observed data.</p>
+      {_table_html(fits_df, highlight_col='formula')}
+    </div>"""
+
+    # ---- summary table ----
+    summary_table = _table_html(df)
+
+    # ---- sysinfo ----
+    def _si(key: str, label: str) -> str:
+        val = sysinfo.get(key, "N/A") or "N/A"
+        return f'<div class="sysinfo-row"><span class="sysinfo-key">{label}</span><span class="sysinfo-val">{val}</span></div>'
+
+    sysinfo_html = f"""
+      <div class="sysinfo-grid">
+        <div>
+          {_si('platform', 'Platform')}
+          {_si('python_version', 'Python')}
+          {_si('processor', 'Processor')}
+        </div>
+        <div>
+          <div class="sysinfo-row"><span class="sysinfo-key">CPU Cores</span><span class="sysinfo-val">{sysinfo['cpu_count_physical']} physical / {sysinfo['cpu_count_logical']} logical</span></div>
+          <div class="sysinfo-row"><span class="sysinfo-key">Memory</span><span class="sysinfo-val">{sysinfo['memory_total_gb']} GB</span></div>
+          {_si('architecture', 'Architecture')}
+        </div>
+      </div>"""
+
+    date_str = sysinfo["timestamp"][:10]
+    ts_str = sysinfo["timestamp"]
+
+    html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title}</title>
-    <style>
-        :root {{
-            --primary-color: #2563eb;
-            --success-color: #16a34a;
-            --warning-color: #d97706;
-            --error-color: #dc2626;
-            --bg-color: #f8fafc;
-            --card-bg: #ffffff;
-            --text-color: #1e293b;
-            --border-color: #e2e8f0;
-        }}
-        
-        * {{
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }}
-        
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: var(--bg-color);
-            color: var(--text-color);
-            line-height: 1.6;
-        }}
-        
-        .container {{
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
-        }}
-        
-        header {{
-            background: linear-gradient(135deg, var(--primary-color), #1d4ed8);
-            color: white;
-            padding: 3rem 2rem;
-            text-align: center;
-            margin-bottom: 2rem;
-            border-radius: 12px;
-        }}
-        
-        header h1 {{
-            font-size: 2.5rem;
-            margin-bottom: 0.5rem;
-        }}
-        
-        header .subtitle {{
-            opacity: 0.9;
-            font-size: 1.1rem;
-        }}
-        
-        section {{
-            background: var(--card-bg);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }}
-        
-        section h2 {{
-            color: var(--primary-color);
-            margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 2px solid var(--border-color);
-        }}
-        
-        .stat-cards {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 1rem;
-            margin: 1rem 0;
-        }}
-        
-        .stat-card {{
-            background: var(--bg-color);
-            padding: 1.5rem;
-            border-radius: 8px;
-            text-align: center;
-            border-left: 4px solid var(--primary-color);
-        }}
-        
-        .stat-card.success {{
-            border-left-color: var(--success-color);
-        }}
-        
-        .stat-card.warning {{
-            border-left-color: var(--warning-color);
-        }}
-        
-        .stat-card.error {{
-            border-left-color: var(--error-color);
-        }}
-        
-        .stat-value {{
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: var(--text-color);
-        }}
-        
-        .stat-label {{
-            font-size: 0.875rem;
-            color: #64748b;
-            margin-top: 0.25rem;
-        }}
-        
-        .summary-table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }}
-        
-        .summary-table th,
-        .summary-table td {{
-            padding: 0.75rem;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-        }}
-        
-        .summary-table th {{
-            background: var(--bg-color);
-            font-weight: 600;
-            position: sticky;
-            top: 0;
-        }}
-        
-        .summary-table tr:hover {{
-            background: var(--bg-color);
-        }}
-        
-        .system-info {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1rem;
-        }}
-        
-        .system-info-item {{
-            display: flex;
-            justify-content: space-between;
-            padding: 0.5rem 0;
-            border-bottom: 1px dashed var(--border-color);
-        }}
-        
-        .system-info-label {{
-            color: #64748b;
-        }}
-        
-        .system-info-value {{
-            font-weight: 500;
-        }}
-        
-        .chart-section iframe,
-        .chart-section .vega-embed {{
-            width: 100%;
-            min-height: 450px;
-        }}
-        
-        footer {{
-            text-align: center;
-            padding: 2rem;
-            color: #64748b;
-            font-size: 0.875rem;
-        }}
-        
-        @media (max-width: 768px) {{
-            .container {{
-                padding: 1rem;
-            }}
-            
-            header {{
-                padding: 2rem 1rem;
-            }}
-            
-            header h1 {{
-                font-size: 1.75rem;
-            }}
-        }}
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>{_CSS}</style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>{title}</h1>
-            <div class="subtitle">Generated by TempoBench on {system_info['timestamp'][:10]}</div>
-        </header>
-        
-        <section class="overview">
-            <h2>Performance Overview</h2>
-            <div class="stat-cards">
-                {_generate_stats_cards(df)}
-            </div>
-        </section>
-        
-        {runs_summary}
-        
-        {chart_embed}
-        
-        <section class="summary-section">
-            <h2>Detailed Results</h2>
-            {_generate_summary_table_html(df)}
-        </section>
-        
-        {fits_html}
-        
-        <section class="system-section">
-            <h2>System Information</h2>
-            <div class="system-info">
-                <div>
-                    <div class="system-info-item">
-                        <span class="system-info-label">Platform</span>
-                        <span class="system-info-value">{system_info['platform']}</span>
-                    </div>
-                    <div class="system-info-item">
-                        <span class="system-info-label">Python</span>
-                        <span class="system-info-value">{system_info['python_version']}</span>
-                    </div>
-                    <div class="system-info-item">
-                        <span class="system-info-label">Processor</span>
-                        <span class="system-info-value">{system_info['processor'] or 'N/A'}</span>
-                    </div>
-                </div>
-                <div>
-                    <div class="system-info-item">
-                        <span class="system-info-label">CPU Cores</span>
-                        <span class="system-info-value">{system_info['cpu_count_physical']} physical / {system_info['cpu_count_logical']} logical</span>
-                    </div>
-                    <div class="system-info-item">
-                        <span class="system-info-label">Memory</span>
-                        <span class="system-info-value">{system_info['memory_total_gb']} GB</span>
-                    </div>
-                    <div class="system-info-item">
-                        <span class="system-info-label">Architecture</span>
-                        <span class="system-info-value">{system_info['architecture']}</span>
-                    </div>
-                </div>
-            </div>
-        </section>
-        
-        <footer>
-            <p>Generated by TempoBench - Language-agnostic benchmarking orchestrator</p>
-            <p>Report timestamp: {system_info['timestamp']}</p>
-        </footer>
+  <div class="container">
+
+    <div class="report-header">
+      <h1>{title}</h1>
+      <div class="meta">Generated on {date_str}</div>
     </div>
+
+    <div class="section">
+      <h2><span class="icon">⚡</span> Performance Overview</h2>
+      <div class="stat-grid">{overview_cards}</div>
+    </div>
+
+    {runs_section}
+
+    {chart_section}
+
+    <div class="section">
+      <h2><span class="icon">📋</span> Detailed Results</h2>
+      {summary_table}
+    </div>
+
+    {fits_section}
+
+    <div class="section">
+      <h2><span class="icon">🖥️</span> System Information</h2>
+      {sysinfo_html}
+    </div>
+
+    <div class="report-footer">
+      <p>Generated by <a href="https://github.com/tempobench/tempobench">TempoBench</a> · {ts_str}</p>
+    </div>
+
+  </div>
 </body>
-</html>'''
-    
+</html>"""
+
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(html)
-    
+
     return html
 
+
+# ---------------------------------------------------------------------------
+# Comparison helpers
+# ---------------------------------------------------------------------------
 
 def compare_summaries(
     current_csv: Path,
     baseline_csv: Path,
     threshold_pct: float = 5.0,
 ) -> pd.DataFrame:
-    """Compare current results against a baseline.
-    
-    Args:
-        current_csv: Path to current summary CSV
-        baseline_csv: Path to baseline summary CSV  
-        threshold_pct: Threshold percentage for flagging regressions
-        
-    Returns:
-        DataFrame with comparison results including delta and regression flags
-    """
+    """Compare current results against a baseline."""
     current = pd.read_csv(current_csv)
     baseline = pd.read_csv(baseline_csv)
-    
-    # Identify common group columns
-    group_cols = [c for c in ['bench', 'impl', 'n'] if c in current.columns and c in baseline.columns]
+
+    group_cols = [c for c in ["bench", "impl", "n"] if c in current.columns and c in baseline.columns]
     if not group_cols:
-        group_cols = ['bench'] if 'bench' in current.columns else []
-    
+        group_cols = ["bench"] if "bench" in current.columns else []
     if not group_cols:
         return pd.DataFrame()
-    
-    # Merge on group columns
-    merged = current.merge(
-        baseline,
-        on=group_cols,
-        suffixes=('_current', '_baseline'),
-        how='outer'
-    )
-    
-    # Calculate deltas for time metrics
+
+    merged = current.merge(baseline, on=group_cols, suffixes=("_current", "_baseline"), how="outer")
     result_cols = list(group_cols)
-    
-    for metric in ['wall_ms_median', 'wall_ms_mean']:
-        curr_col = f'{metric}_current'
-        base_col = f'{metric}_baseline'
+
+    for metric in ["wall_ms_median", "wall_ms_mean"]:
+        curr_col, base_col = f"{metric}_current", f"{metric}_baseline"
         if curr_col in merged.columns and base_col in merged.columns:
-            merged[f'{metric}_delta'] = merged[curr_col] - merged[base_col]
-            merged[f'{metric}_delta_pct'] = (
-                (merged[curr_col] - merged[base_col]) / merged[base_col] * 100
-            ).round(2)
-            merged[f'{metric}_regression'] = merged[f'{metric}_delta_pct'] > threshold_pct
-            result_cols.extend([
-                curr_col, base_col, f'{metric}_delta', f'{metric}_delta_pct', f'{metric}_regression'
-            ])
-    
-    # Calculate deltas for memory metrics  
-    for metric in ['peak_rss_mb_median', 'peak_rss_mb_mean']:
-        curr_col = f'{metric}_current'
-        base_col = f'{metric}_baseline'
+            merged[f"{metric}_delta"] = merged[curr_col] - merged[base_col]
+            merged[f"{metric}_delta_pct"] = ((merged[curr_col] - merged[base_col]) / merged[base_col] * 100).round(2)
+            merged[f"{metric}_regression"] = merged[f"{metric}_delta_pct"] > threshold_pct
+            result_cols.extend([curr_col, base_col, f"{metric}_delta", f"{metric}_delta_pct", f"{metric}_regression"])
+
+    for metric in ["peak_rss_mb_median", "peak_rss_mb_mean"]:
+        curr_col, base_col = f"{metric}_current", f"{metric}_baseline"
         if curr_col in merged.columns and base_col in merged.columns:
-            merged[f'{metric}_delta'] = merged[curr_col] - merged[base_col]
-            merged[f'{metric}_delta_pct'] = (
-                (merged[curr_col] - merged[base_col]) / merged[base_col] * 100
-            ).round(2)
-            result_cols.extend([
-                curr_col, base_col, f'{metric}_delta', f'{metric}_delta_pct'
-            ])
-    
-    # Select only relevant columns
+            merged[f"{metric}_delta"] = merged[curr_col] - merged[base_col]
+            merged[f"{metric}_delta_pct"] = ((merged[curr_col] - merged[base_col]) / merged[base_col] * 100).round(2)
+            result_cols.extend([curr_col, base_col, f"{metric}_delta", f"{metric}_delta_pct"])
+
     result_cols = [c for c in result_cols if c in merged.columns]
     return merged[result_cols]
 
+
+# ---------------------------------------------------------------------------
+# Comparison report
+# ---------------------------------------------------------------------------
 
 def generate_comparison_report(
     comparison_df: pd.DataFrame,
@@ -528,283 +557,102 @@ def generate_comparison_report(
     threshold_pct: float = 5.0,
     output_path: Optional[Path] = None,
 ) -> str:
-    """Generate an HTML comparison report.
-    
-    Args:
-        comparison_df: DataFrame from compare_summaries
-        title: Report title
-        threshold_pct: Threshold used for regression detection
-        output_path: If provided, save the report to this path
-        
-    Returns:
-        The generated HTML as a string
-    """
-    system_info = get_system_info()
-    
-    # Count regressions
-    regression_cols = [c for c in comparison_df.columns if c.endswith('_regression')]
-    total_regressions = 0
-    for col in regression_cols:
-        total_regressions += comparison_df[col].sum()
-    
+    """Generate an HTML comparison report."""
+    sysinfo = get_system_info()
+
+    regression_cols = [c for c in comparison_df.columns if c.endswith("_regression")]
+    total_regressions = sum(comparison_df[col].sum() for col in regression_cols)
     total_configs = len(comparison_df)
-    improvements = 0
-    
-    # Count improvements (negative delta)
-    delta_pct_cols = [c for c in comparison_df.columns if c.endswith('_delta_pct')]
-    for col in delta_pct_cols:
-        improvements += (comparison_df[col] < -threshold_pct).sum()
-    
-    # Generate table with styling for regressions
-    def style_row(row):
-        styles = []
-        for col in comparison_df.columns:
-            if col.endswith('_regression') and row.get(col, False):
-                styles.append('background-color: #fef2f2; color: #dc2626;')
-            elif col.endswith('_delta_pct'):
-                val = row.get(col, 0)
-                if pd.notna(val):
-                    if val > threshold_pct:
-                        styles.append('background-color: #fef2f2; color: #dc2626;')
-                    elif val < -threshold_pct:
-                        styles.append('background-color: #f0fdf4; color: #16a34a;')
-                    else:
-                        styles.append('')
-                else:
-                    styles.append('')
-            else:
-                styles.append('')
-        return styles
-    
-    # Build table HTML
-    table_html = ['<table class="comparison-table">']
-    table_html.append('<thead><tr>')
+
+    delta_pct_cols = [c for c in comparison_df.columns if c.endswith("_delta_pct")]
+    improvements = sum((comparison_df[col] < -threshold_pct).sum() for col in delta_pct_cols)
+
+    # Build comparison table with conditional styling
+    tbl = ['<div class="table-wrap"><table class="data-table">']
+    tbl.append("<thead><tr>")
     for col in comparison_df.columns:
-        table_html.append(f'<th>{col}</th>')
-    table_html.append('</tr></thead>')
-    table_html.append('<tbody>')
-    
+        tbl.append(f"<th>{_col_label(col)}</th>")
+    tbl.append("</tr></thead><tbody>")
+
     for _, row in comparison_df.iterrows():
-        table_html.append('<tr>')
+        tbl.append("<tr>")
         for col in comparison_df.columns:
             val = row[col]
-            cell_class = ''
-            if col.endswith('_regression'):
+            css = ""
+            if col.endswith("_regression"):
                 if val:
-                    cell_class = 'class="regression"'
-                    val = '⚠️ YES'
+                    css = ' class="regression"'
+                    val = "⚠ YES"
                 else:
-                    val = '✓ NO'
-            elif col.endswith('_delta_pct'):
-                if pd.notna(val):
-                    if val > threshold_pct:
-                        cell_class = 'class="regression"'
-                        val = f'+{val:.1f}%'
-                    elif val < -threshold_pct:
-                        cell_class = 'class="improvement"'
-                        val = f'{val:.1f}%'
-                    else:
-                        val = f'{val:.1f}%'
+                    val = "✓ NO"
+            elif col.endswith("_delta_pct") and pd.notna(val):
+                if val > threshold_pct:
+                    css = ' class="regression"'
+                    val = f"+{val:.1f}%"
+                elif val < -threshold_pct:
+                    css = ' class="improvement"'
+                    val = f"{val:.1f}%"
+                else:
+                    val = f"{val:.1f}%"
             elif isinstance(val, float):
-                val = f'{val:.3f}'
-            table_html.append(f'<td {cell_class}>{val}</td>')
-        table_html.append('</tr>')
-    table_html.append('</tbody></table>')
-    
-    status_class = 'success' if total_regressions == 0 else 'warning'
-    status_text = 'No regressions detected' if total_regressions == 0 else f'{int(total_regressions)} regressions detected'
-    status_icon = '✓' if total_regressions == 0 else '⚠️'
-    
-    html = f'''<!DOCTYPE html>
+                val = f"{val:.3f}"
+            tbl.append(f"<td{css}>{val}</td>")
+        tbl.append("</tr>")
+    tbl.append("</tbody></table></div>")
+    table_html = "\n".join(tbl)
+
+    banner_cls = "pass" if total_regressions == 0 else "fail"
+    banner_icon = "✓" if total_regressions == 0 else "⚠"
+    banner_text = "No regressions detected" if total_regressions == 0 else f"{int(total_regressions)} regression{'s' if total_regressions != 1 else ''} detected"
+
+    html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title}</title>
-    <style>
-        :root {{
-            --primary-color: #2563eb;
-            --success-color: #16a34a;
-            --warning-color: #d97706;
-            --error-color: #dc2626;
-            --bg-color: #f8fafc;
-            --card-bg: #ffffff;
-            --text-color: #1e293b;
-            --border-color: #e2e8f0;
-        }}
-        
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: var(--bg-color);
-            color: var(--text-color);
-            line-height: 1.6;
-        }}
-        
-        .container {{ max-width: 1400px; margin: 0 auto; padding: 2rem; }}
-        
-        header {{
-            background: linear-gradient(135deg, #7c3aed, #5b21b6);
-            color: white;
-            padding: 3rem 2rem;
-            text-align: center;
-            margin-bottom: 2rem;
-            border-radius: 12px;
-        }}
-        
-        header h1 {{ font-size: 2.5rem; margin-bottom: 0.5rem; }}
-        
-        .status-banner {{
-            padding: 1.5rem;
-            border-radius: 12px;
-            margin-bottom: 1.5rem;
-            text-align: center;
-            font-size: 1.2rem;
-            font-weight: 600;
-        }}
-        
-        .status-banner.success {{
-            background: #f0fdf4;
-            color: var(--success-color);
-            border: 2px solid var(--success-color);
-        }}
-        
-        .status-banner.warning {{
-            background: #fef2f2;
-            color: var(--error-color);
-            border: 2px solid var(--error-color);
-        }}
-        
-        section {{
-            background: var(--card-bg);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }}
-        
-        section h2 {{
-            color: var(--primary-color);
-            margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 2px solid var(--border-color);
-        }}
-        
-        .stat-cards {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 1rem;
-            margin: 1rem 0;
-        }}
-        
-        .stat-card {{
-            background: var(--bg-color);
-            padding: 1.5rem;
-            border-radius: 8px;
-            text-align: center;
-            border-left: 4px solid var(--primary-color);
-        }}
-        
-        .stat-card.success {{ border-left-color: var(--success-color); }}
-        .stat-card.warning {{ border-left-color: var(--warning-color); }}
-        .stat-card.error {{ border-left-color: var(--error-color); }}
-        
-        .stat-value {{ font-size: 2rem; font-weight: 700; }}
-        .stat-label {{ font-size: 0.875rem; color: #64748b; margin-top: 0.25rem; }}
-        
-        .comparison-table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.85rem;
-            overflow-x: auto;
-            display: block;
-        }}
-        
-        .comparison-table th, .comparison-table td {{
-            padding: 0.6rem;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-            white-space: nowrap;
-        }}
-        
-        .comparison-table th {{
-            background: var(--bg-color);
-            font-weight: 600;
-            position: sticky;
-            top: 0;
-        }}
-        
-        .comparison-table tr:hover {{ background: var(--bg-color); }}
-        
-        .comparison-table .regression {{
-            background-color: #fef2f2;
-            color: #dc2626;
-            font-weight: 600;
-        }}
-        
-        .comparison-table .improvement {{
-            background-color: #f0fdf4;
-            color: #16a34a;
-            font-weight: 600;
-        }}
-        
-        footer {{
-            text-align: center;
-            padding: 2rem;
-            color: #64748b;
-            font-size: 0.875rem;
-        }}
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>{_CSS}</style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>{title}</h1>
-            <div class="subtitle">Regression threshold: {threshold_pct}%</div>
-        </header>
-        
-        <div class="status-banner {status_class}">
-            {status_icon} {status_text}
-        </div>
-        
-        <section>
-            <h2>Summary</h2>
-            <div class="stat-cards">
-                <div class="stat-card">
-                    <div class="stat-value">{total_configs}</div>
-                    <div class="stat-label">Configurations Compared</div>
-                </div>
-                <div class="stat-card {'error' if total_regressions > 0 else 'success'}">
-                    <div class="stat-value">{int(total_regressions)}</div>
-                    <div class="stat-label">Regressions</div>
-                </div>
-                <div class="stat-card success">
-                    <div class="stat-value">{int(improvements)}</div>
-                    <div class="stat-label">Improvements</div>
-                </div>
-            </div>
-        </section>
-        
-        <section>
-            <h2>Detailed Comparison</h2>
-            <p style="margin-bottom: 1rem; color: #64748b;">
-                Values highlighted in <span style="color: #dc2626;">red</span> indicate regressions.
-                Values highlighted in <span style="color: #16a34a;">green</span> indicate improvements.
-            </p>
-            {''.join(table_html)}
-        </section>
-        
-        <footer>
-            <p>Generated by TempoBench - Language-agnostic benchmarking orchestrator</p>
-            <p>Report timestamp: {system_info['timestamp']}</p>
-        </footer>
+  <div class="container">
+
+    <div class="report-header" style="background:linear-gradient(135deg,#7c3aed,#5b21b6)">
+      <h1>{title}</h1>
+      <div class="meta">Regression threshold: {threshold_pct}%</div>
     </div>
+
+    <div class="status-banner {banner_cls}">{banner_icon} {banner_text}</div>
+
+    <div class="section">
+      <h2><span class="icon">📊</span> Summary</h2>
+      <div class="stat-grid">
+        {_stat_card(str(total_configs), 'Compared', '')}
+        {_stat_card(str(int(total_regressions)), 'Regressions', 'err' if total_regressions > 0 else 'ok')}
+        {_stat_card(str(int(improvements)), 'Improvements', 'ok')}
+      </div>
+    </div>
+
+    <div class="section">
+      <h2><span class="icon">🔍</span> Detailed Comparison</h2>
+      <p class="desc">
+        Cells in <span style="color:var(--c-red);font-weight:600">red</span> indicate regressions;
+        <span style="color:var(--c-green);font-weight:600">green</span> indicates improvements.
+      </p>
+      {table_html}
+    </div>
+
+    <div class="report-footer">
+      <p>Generated by <a href="https://github.com/tempobench/tempobench">TempoBench</a> · {sysinfo['timestamp']}</p>
+    </div>
+
+  </div>
 </body>
-</html>'''
-    
+</html>"""
+
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(html)
-    
+
     return html

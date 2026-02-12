@@ -24,6 +24,7 @@ class Limits:
     prune_on_timeout: bool = False
     shuffle: bool = True
     growth_key: Optional[str] = "n"
+    workers: int = 1
 
 
 @dataclass
