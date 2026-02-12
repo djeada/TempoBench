@@ -38,14 +38,18 @@ jobs:
           python -m pip install -e .
           python -m pip install "nuitka>=2.5" ordered-set zstandard
 
-      - name: Create Nuitka entrypoint
+      - name: Create Nuitka entrypoint  
         shell: python
         run: |
           from pathlib import Path
           Path("build").mkdir(exist_ok=True)
+          # Create a standalone entry point script
           Path("build/tembench_entry.py").write_text(
-              "from tembench.cli import app\n\n"
+              "#!/usr/bin/env python3\n"
+              "# -*- coding: utf-8 -*-\n"
+              "import sys\n"
               "if __name__ == '__main__':\n"
+              "    from tembench.cli import app\n"
               "    app()\n",
               encoding="utf-8",
           )
@@ -58,6 +62,7 @@ jobs:
           --output-dir=dist
           --output-filename=tembench
           --include-package=tembench
+          --enable-plugin=anti-bloat
           build/tembench_entry.py
 
       - name: Verify built executable
