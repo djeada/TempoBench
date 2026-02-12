@@ -4,10 +4,7 @@ __pycache__/
 *$py.class
 
 # TempoBench artifacts
-artifacts/
-
-# Example run outputs
-artifacts_example/
+artifacts*
 
 # C extensions
 *.so
