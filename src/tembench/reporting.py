@@ -146,6 +146,7 @@ _CSS = """\
   --radius: 12px;
   --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
   --shadow-md: 0 4px 6px rgba(0,0,0,.06), 0 2px 4px rgba(0,0,0,.04);
+  --shadow-lg: 0 8px 12px rgba(0,0,0,.15);
   --font: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
 }
@@ -164,6 +165,7 @@ _CSS = """\
   --c-border: #334155;
   --shadow: 0 1px 3px rgba(0,0,0,.3), 0 1px 2px rgba(0,0,0,.2);
   --shadow-md: 0 4px 6px rgba(0,0,0,.3), 0 2px 4px rgba(0,0,0,.2);
+  --shadow-lg: 0 8px 12px rgba(0,0,0,.4);
 }
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -385,7 +387,7 @@ body {
 }
 .theme-toggle:hover {
   transform: scale(1.05);
-  box-shadow: 0 8px 12px rgba(0,0,0,.15);
+  box-shadow: var(--shadow-lg);
 }
 .theme-toggle-icon {
   font-size: 1.3rem;
