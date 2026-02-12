@@ -5,12 +5,14 @@ A language-agnostic benchmarking CLI that runs any shell command with parameter 
 ## Features
 
 - **Parameter sweeps** — define grids of inputs and implementations; every combination is executed with configurable repeats, warm-ups, and timeouts.
+- **Parallel execution** — run grid points concurrently with `--workers`/`-j` to cut total benchmark time on multi-core machines.
 - **Metrics collection** — wall-clock time and peak RSS are captured per trial using OS-native tools (`psutil`), with outlier filtering via Tukey fences.
-- **Complexity estimation** — observed runtimes are fitted against O(1) … O(n³) models in log-space; the best model is selected by AIC and overlaid on plots.
+- **Complexity estimation** — observed runtimes are fitted against O(1) … O(n³) models using a multi-layer algorithm (outlier-robust constant detection, log-log slope fallback, step-up OLS with adaptive thresholds, and tail-ratio guards). The best model is selected and overlaid on plots.
+- **Interactive charts** — Vega-Lite charts with click-to-toggle legend, crosshair tooltips, and smooth fit curves. Data points shown as discrete markers, fit lines as smooth interpolated curves.
 - **Rich CLI output** — live progress bars, colored status tables, and system-info display powered by [Rich](https://github.com/Textualize/rich).
 - **Reports & dashboards** — self-contained HTML reports with embedded Vega-Lite charts, heatmaps, comparison views, and regression detection.
 - **Baseline comparison** — compare a new run against a previous baseline and flag regressions above a configurable threshold.
-- **Reproducibility** — provenance snapshots record seeds, Python version, working directory, and hardware details alongside every run.
+- **Reproducibility** — provenance snapshots record seeds, Python version, worker count, working directory, and hardware details alongside every run.
 
 ## Installation
 
@@ -36,11 +38,11 @@ benchmarks:
     cmd: "python examples/unique_impl.py --n {n} --impl {impl} --seed 42"
 
 grid:
-  n: [1000, 2000, 4000, 8000]
+  n: [10000, 50000, 100000, 500000, 1000000, 5000000]
   impl: ["quadratic", "sort_scan", "hash_set"]
 
 limits:
-  timeout_sec: 20
+  timeout_sec: 30
   warmups: 0
   repeats: 2
 ```
@@ -48,7 +50,12 @@ limits:
 **2. Run the pipeline:**
 
 ```bash
+# Sequential (default)
 tembench run --config examples/unique_bench.yaml --out-dir artifacts
+
+# Parallel — 4 workers for faster execution
+tembench run --config examples/unique_bench.yaml --out-dir artifacts -j 4
+
 tembench summarize --runs artifacts/runs.jsonl --out-csv artifacts/summary.csv
 tembench plot --summary artifacts/summary.csv --out-html artifacts/runtime.html
 ```
@@ -76,6 +83,29 @@ tembench report --summary artifacts/summary.csv
 
 Run `tembench --help` or `tembench <command> --help` for full option details.
 
+## Parallel Execution
+
+By default, benchmarks run sequentially (`workers: 1`) for the most accurate
+timing. When wall-clock precision is less critical and throughput matters,
+use multiple workers to run grid points concurrently:
+
+```bash
+# CLI flag (overrides config)
+tembench run --config bench.yaml -j 4
+
+# Or set in YAML
+limits:
+  workers: 4
+```
+
+> **Note:** Parallel runs share CPU and memory bandwidth, so individual timings
+> may show more variance than sequential runs. Use `-j 1` (default) for
+> publication-quality measurements; use `-j N` for rapid iteration and CI.
+
+In sequential mode, `prune_on_timeout` and `pin_cpu` work as expected.
+In parallel mode, CPU pinning is disabled and pruning is not applied (grid
+points are dispatched independently).
+
 ## Artifacts
 
 All output is written to the `--out-dir` directory (default `artifacts/`):
@@ -83,17 +113,24 @@ All output is written to the `--out-dir` directory (default `artifacts/`):
 | File              | Format | Contents                                      |
 |-------------------|--------|-----------------------------------------------|
 | `runs.jsonl`      | JSONL  | One JSON object per trial (status, wall_ms, peak_rss_mb, stdout, stderr) |
-| `provenance.json` | JSON   | Seed, Python version, CLI invocation, working directory |
+| `provenance.json` | JSON   | Seed, Python version, worker count, CLI invocation, working directory |
 | `summary.csv`     | CSV    | Median/mean/p10/p90 per grid point            |
 | `runtime.html`    | HTML   | Vega-Lite runtime chart with complexity overlay |
-| `fits.csv`        | CSV    | Best-fit model, coefficients, and AIC per series |
+| `fits.csv`        | CSV    | Best-fit model, coefficients, and RSS per series |
 | `report.html`     | HTML   | Full report with charts, tables, and system info |
 
 ## Complexity Fitting
 
 Candidate models: **O(1)**, **O(log n)**, **O(n)**, **O(n log n)**, **O(n²)**, **O(n³)**.
 
-The fitter selects the best growth class via OLS + AIC, then shifts the curve up to form a proper **upper bound** — the fit line always sits at or above every observed data point, as Big-O requires. The plot shows the Big-O class (e.g. `O(n log n)`) on the curve, and the legend shows the concrete bound formula (e.g. `T(n) ≤ 1.614e-05·n·log(n) + 37.3`).
+The fitting algorithm uses a multi-layer approach:
+
+1. **Constant detection** — outlier-robust CV test; if data (or data minus any single outlier) has CV < 8%, classify as O(1).
+2. **Log-log slope fallback** — for ≤ 3 data points with low dynamic range, where OLS lacks degrees of freedom.
+3. **Step-up OLS** — fit all models via OLS (`y = C·f(n) + baseline`), start from the simplest valid model, accept more complex only if RSS improves by a dynamic-range-dependent factor.
+4. **Tail-ratio guard** — for O(n) vs O(n log n) disambiguation, verify using the growth ratio at the two largest measured n values.
+
+The selected model is shifted up to form a proper **upper bound** — the fit line sits at or above every observed data point, as Big-O semantics require. The plot shows the Big-O class (e.g. `O(n log n)`) on the curve, and the legend shows the concrete bound formula (e.g. `T(n) ≤ 5.36e-05·n·log(n) + 55.7`).
 
 ```bash
 tembench plot --summary artifacts/summary.csv --export-fits artifacts/fits.csv
@@ -117,10 +154,11 @@ limits:
   timeout_sec: 30               # per-trial timeout (soft SIGTERM, then SIGKILL)
   warmups: 1                    # discarded warm-up runs per grid point
   repeats: 3                    # measured repetitions per grid point
+  workers: 1                    # parallel workers (1 = sequential, default)
   prune_on_timeout: false       # skip larger values after a timeout
   shuffle: true                 # randomize sweep order to reduce drift
 
-pin_cpu: 0                      # optional CPU affinity (Linux only)
+pin_cpu: 0                      # optional CPU affinity (Linux, sequential only)
 ```
 
 ## License
