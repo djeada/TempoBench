@@ -3,6 +3,12 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# TempoBench artifacts
+artifacts/
+
+# Example run outputs
+artifacts_example/
+
 # C extensions
 *.so
 
