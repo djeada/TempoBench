@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import json
-import sys
 import os
 import random
 import shlex
 import signal
 import subprocess
+import sys
 import tempfile
 import time
-from dataclasses import asdict
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 from itertools import product
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 import psutil
 
@@ -39,7 +39,6 @@ def run_once(cmd: str, env: Dict[str, str], cwd: Path | None, timeout: float | N
     ts = datetime.now(timezone.utc).isoformat()
     peak_rss = 0
     status = "ok"
-    err = None
     rc = None
     try:
         with tempfile.NamedTemporaryFile(mode="w+", delete=False) as out_f, tempfile.NamedTemporaryFile(mode="w+", delete=False) as err_f:
@@ -119,14 +118,72 @@ def build_once(bench: Benchmark):
     subprocess.run(bench.build, shell=True, check=False, cwd=bench.workdir or None)
 
 
-def run_benchmarks(cfg: Config, out_path: Path, seed: int = 42, retries: int = 0):
+# ---------------------------------------------------------------------------
+# Grid-point execution (one function for both serial & parallel paths)
+# ---------------------------------------------------------------------------
+
+def _run_grid_point(
+    bench: Benchmark,
+    params: Dict[str, object],
+    timeout: float | None,
+    warmups: int,
+    repeats: int,
+    retries: int,
+) -> List[Dict]:
+    """Execute warmups + repeats for a single (bench, params) combination.
+
+    Returns a list of result records (one per repeat, plus any retry attempts).
+    """
+    cmd = format_cmd(bench.cmd, params)
+    rec_base = {"bench": bench.name, "cmd": cmd, "params": params}
+    cwd = Path(bench.workdir) if bench.workdir else None
+
+    # Warmups
+    for _ in range(max(0, warmups)):
+        run_once(cmd, bench.env, cwd, timeout)
+
+    # Repeats
+    results: List[Dict] = []
+    attempt = 0
+    done = 0
+    reps = max(1, repeats)
+    while done < reps:
+        attempt += 1
+        rec = run_once(cmd, bench.env, cwd, timeout)
+        rec.update(rec_base)
+        results.append(rec)
+        if rec["status"] == "ok":
+            done += 1
+        else:
+            if attempt - done <= retries:
+                continue
+            else:
+                done += 1  # count as a failed repetition
+    return results
+
+
+def run_benchmarks(
+    cfg: Config,
+    out_path: Path,
+    seed: int = 42,
+    retries: int = 0,
+    on_trial: object = None,
+    append: bool = False,
+):
+    """Run all benchmarks and write results.
+
+    Args:
+        on_trial: Optional callback(bench_name, params, rep, total_reps, result)
+                  called after each trial for progress reporting.
+    """
+    workers = max(1, cfg.limits.workers)
     points = expand_grid(cfg.grid)
     if cfg.limits.shuffle:
         random.Random(seed).shuffle(points)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # optional CPU pinning (Linux)
-    if cfg.pin_cpu is not None:
+    # optional CPU pinning (Linux, serial mode only)
+    if cfg.pin_cpu is not None and workers == 1:
         try:
             p = psutil.Process()
             p.cpu_affinity([cfg.pin_cpu])
@@ -140,47 +197,111 @@ def run_benchmarks(cfg: Config, out_path: Path, seed: int = 42, retries: int = 0
         "cwd": str(Path.cwd()),
         "python": sys.version,
         "cmdline": " ".join(shlex.quote(a) for a in sys.argv),
+        "workers": workers,
     }
     (out_path.parent / "provenance.json").write_text(json.dumps(prov, indent=2))
 
-    with out_path.open("a") as f:
+    if workers == 1:
+        _run_serial(cfg, out_path, points, retries, on_trial, append)
+    else:
+        _run_parallel(cfg, out_path, points, retries, on_trial, append, workers)
+
+
+def _run_serial(
+    cfg: Config,
+    out_path: Path,
+    points: List[Dict],
+    retries: int,
+    on_trial: object,
+    append: bool,
+):
+    """Original sequential execution path — preserves pruning behaviour."""
+    mode = "a" if append else "w"
+    reps = max(1, cfg.limits.repeats)
+    with out_path.open(mode) as f:
         for bench in cfg.benchmarks:
             build_once(bench)
-            timed_out_keys = set()
+            timed_out_keys: set = set()
             for params in points:
-                cmd = format_cmd(bench.cmd, params)
-                rec_base = {
-                    "bench": bench.name,
-                    "cmd": cmd,
-                    "params": params,
-                }
-                # prune if growth key exceeded after timeout
                 gk = cfg.limits.growth_key
                 key_val = params.get(gk) if gk else None
                 if cfg.limits.prune_on_timeout and gk and key_val in timed_out_keys:
-                    skip_rec = {**rec_base, "ts": datetime.now(timezone.utc).isoformat(), "status": "skipped"}
+                    skip_rec = {
+                        "bench": bench.name,
+                        "cmd": format_cmd(bench.cmd, params),
+                        "params": params,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "status": "skipped",
+                    }
                     f.write(json.dumps(skip_rec) + "\n")
                     f.flush()
                     continue
-                # warmups
-                for _ in range(max(0, cfg.limits.warmups)):
-                    run_once(cmd, bench.env, Path(bench.workdir) if bench.workdir else None, cfg.limits.timeout_sec)
-                # repeats
-                reps = max(1, cfg.limits.repeats)
-                attempt = 0
-                done = 0
-                while done < reps:
-                    attempt += 1
-                    rec = run_once(cmd, bench.env, Path(bench.workdir) if bench.workdir else None, cfg.limits.timeout_sec)
-                    rec.update(rec_base)
+
+                results = _run_grid_point(
+                    bench, params, cfg.limits.timeout_sec,
+                    cfg.limits.warmups, cfg.limits.repeats, retries,
+                )
+                for i, rec in enumerate(results):
                     f.write(json.dumps(rec) + "\n")
                     f.flush()
-                    if rec["status"] == "ok":
-                        done += 1
-                    else:
-                        if rec["status"] == "timeout" and cfg.limits.prune_on_timeout and gk and key_val is not None:
-                            timed_out_keys.add(key_val)
-                        if attempt - done <= retries:
-                            continue
-                        else:
-                            done += 1  # count as a failed repetition
+                    if on_trial:
+                        on_trial(bench.name, params, i + 1, reps, rec)
+                    if rec["status"] == "timeout" and cfg.limits.prune_on_timeout and gk and key_val is not None:
+                        timed_out_keys.add(key_val)
+
+
+def _run_parallel(
+    cfg: Config,
+    out_path: Path,
+    points: List[Dict],
+    retries: int,
+    on_trial: object,
+    append: bool,
+    workers: int,
+):
+    """Parallel execution using ProcessPoolExecutor."""
+    import threading
+
+    mode = "a" if append else "w"
+    reps = max(1, cfg.limits.repeats)
+    lock = threading.Lock()
+
+    with out_path.open(mode) as f:
+        for bench in cfg.benchmarks:
+            build_once(bench)
+
+            # Submit all grid points to the pool
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                future_to_params = {}
+                for params in points:
+                    fut = pool.submit(
+                        _run_grid_point,
+                        bench, params, cfg.limits.timeout_sec,
+                        cfg.limits.warmups, cfg.limits.repeats, retries,
+                    )
+                    future_to_params[fut] = params
+
+                for fut in as_completed(future_to_params):
+                    params = future_to_params[fut]
+                    try:
+                        results = fut.result()
+                    except Exception as exc:
+                        # If a worker crashes, record an error
+                        results = [{
+                            "bench": bench.name,
+                            "cmd": format_cmd(bench.cmd, params),
+                            "params": params,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "status": "error",
+                            "rc": None,
+                            "wall_ms": 0.0,
+                            "peak_rss_mb": 0.0,
+                            "stderr": str(exc),
+                        }]
+
+                    with lock:
+                        for i, rec in enumerate(results):
+                            f.write(json.dumps(rec) + "\n")
+                            f.flush()
+                            if on_trial:
+                                on_trial(bench.name, params, i + 1, reps, rec)

@@ -1,0 +1,16 @@
+benchmarks:
+  - name: py_unique_count
+    cmd: "python examples/unique_impl.py --n {n} --impl {impl} --seed 42"
+    workdir: "."
+    env: {}
+
+grid:
+  n: [10000, 50000, 100000, 500000, 1000000, 5000000]
+  impl: ["quadratic", "sort_scan", "hash_set"]
+
+limits:
+  timeout_sec: 30
+  warmups: 0
+  repeats: 2
+
+pin_cpu: 0
