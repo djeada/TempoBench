@@ -2,6 +2,8 @@
 
 A language-agnostic benchmarking CLI that runs any shell command with parameter sweeps, records wall-time and memory, estimates Big-O complexity, and generates reports, all from a single YAML config.
 
+<img width="1206" height="795" alt="Screenshot from 2026-02-12 21-53-22" src="https://github.com/user-attachments/assets/26c75949-de62-482d-8cfd-3d27db35eb95" />
+
 ## Features
 
 - **Parameter sweeps** — define grids of inputs and implementations; every combination is executed with configurable repeats, warm-ups, and timeouts.
