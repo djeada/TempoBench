@@ -60,6 +60,7 @@ jobs:
           --output-dir=dist
           --output-filename=tembench
           --include-package=tembench
+          --include-package-data=altair
           build/tembench_entry.py
 
       - name: Package artifact
