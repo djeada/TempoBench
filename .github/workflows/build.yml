@@ -93,11 +93,39 @@ jobs:
 
           exe = candidates[0]
           print(f"Using executable: {exe}")
-          result = subprocess.run([exe, "--help"], capture_output=True, text=True)
-          print(result.stdout[:8000])
-          if result.returncode != 0:
-              print(result.stderr)
-              sys.exit(result.returncode)
+          env = os.environ.copy()
+          env.setdefault("PYTHONUTF8", "1")
+          env.setdefault("PYTHONIOENCODING", "utf-8")
+          env.setdefault("NO_COLOR", "1")
+
+          smoke_tests = [["--help"]]
+          if runner_os == "Windows":
+              # On Windows runners, Rich/console detection for --help can be flaky
+              # when executed under captured pipes, so keep a second startup probe.
+              smoke_tests.append(["sysinfo"])
+
+          last_result = None
+          for args in smoke_tests:
+              print(f"Running smoke test: {exe} {' '.join(args)}")
+              result = subprocess.run(
+                  [exe, *args],
+                  capture_output=True,
+                  text=True,
+                  encoding="utf-8",
+                  errors="replace",
+                  timeout=60,
+                  env=env,
+              )
+              print(result.stdout[:8000])
+              if result.returncode == 0:
+                  last_result = result
+                  break
+              print(result.stderr[:8000])
+              print(f"Smoke test failed with exit code {result.returncode}")
+              last_result = result
+
+          if last_result is None or last_result.returncode != 0:
+              sys.exit(1 if last_result is None else last_result.returncode)
 
       - name: Package artifact
         shell: python
