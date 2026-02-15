@@ -74,7 +74,7 @@ jobs:
           --standalone
           --assume-yes-for-downloads
           --output-dir=dist
-          --output-filename=tembench
+          --output-filename=tembench_entry
           --include-package=tembench
           --include-package-data=altair
           --enable-plugin=anti-bloat
@@ -96,8 +96,8 @@ jobs:
           runner_os = os.environ["RUNNER_OS"]
           expected_candidates = {
               "Windows": [
-                  "dist/tembench.dist/tembench.exe",
-                  "dist/tembench.exe",
+                  "dist/tembench_entry.dist/tembench_entry.exe",
+                  "dist/tembench_entry.exe",
               ],
               "Linux": ["dist/tembench"],
               "macOS": ["dist/tembench"],
@@ -169,14 +169,14 @@ jobs:
           if runner_os == "Windows":
               # Try multiple possible locations for the standalone directory
               standalone_candidates = [
-                  Path("dist/tembench.dist"),
-                  Path("dist") / "tembench.dist",
+                  Path("dist/tembench_entry.dist"),
+                  Path("dist") / "tembench_entry.dist",
               ]
               
               standalone_dir = None
               for candidate in standalone_candidates:
                   if candidate.is_dir():
-                      exe_path = candidate / "tembench.exe"
+                      exe_path = candidate / "tembench_entry.exe"
                       if exe_path.is_file():
                           standalone_dir = candidate
                           print(f"Found standalone directory: {standalone_dir}")
@@ -200,7 +200,7 @@ jobs:
                       print(f"  {item}")
 
           expected = {
-              "Windows": "dist/tembench.exe",
+              "Windows": "dist/tembench_entry.exe",
               "Linux": "dist/tembench",
               "macOS": "dist/tembench",
           }[runner_os]
