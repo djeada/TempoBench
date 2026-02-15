@@ -34,14 +34,19 @@ def format_cmd(template: str, params: Dict[str, object]) -> str:
     return template.format(**params)
 
 
-def run_once(cmd: str, env: Dict[str, str], cwd: Path | None, timeout: float | None) -> Dict:
+def run_once(
+    cmd: str, env: Dict[str, str], cwd: Path | None, timeout: float | None
+) -> Dict:
     start = time.perf_counter()
     ts = datetime.now(timezone.utc).isoformat()
     peak_rss = 0
     status = "ok"
     rc = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w+", delete=False) as out_f, tempfile.NamedTemporaryFile(mode="w+", delete=False) as err_f:
+        with (
+            tempfile.NamedTemporaryFile(mode="w+", delete=False) as out_f,
+            tempfile.NamedTemporaryFile(mode="w+", delete=False) as err_f,
+        ):
             out_path, err_path = out_f.name, err_f.name
         with open(out_path, "w") as out_handle, open(err_path, "w") as err_handle:
             with subprocess.Popen(
@@ -73,7 +78,9 @@ def run_once(cmd: str, env: Dict[str, str], cwd: Path | None, timeout: float | N
                     # Track peak RSS for the process tree
                     try:
                         procs = [p] + p.children(recursive=True)
-                        rss = sum(ch.memory_info().rss for ch in procs if ch.is_running())
+                        rss = sum(
+                            ch.memory_info().rss for ch in procs if ch.is_running()
+                        )
                         peak_rss = max(peak_rss, rss)
                     except psutil.Error:
                         pass
@@ -121,6 +128,7 @@ def build_once(bench: Benchmark):
 # ---------------------------------------------------------------------------
 # Grid-point execution (one function for both serial & parallel paths)
 # ---------------------------------------------------------------------------
+
 
 def _run_grid_point(
     bench: Benchmark,
@@ -238,15 +246,24 @@ def _run_serial(
                     continue
 
                 results = _run_grid_point(
-                    bench, params, cfg.limits.timeout_sec,
-                    cfg.limits.warmups, cfg.limits.repeats, retries,
+                    bench,
+                    params,
+                    cfg.limits.timeout_sec,
+                    cfg.limits.warmups,
+                    cfg.limits.repeats,
+                    retries,
                 )
                 for i, rec in enumerate(results):
                     f.write(json.dumps(rec) + "\n")
                     f.flush()
                     if on_trial:
                         on_trial(bench.name, params, i + 1, reps, rec)
-                    if rec["status"] == "timeout" and cfg.limits.prune_on_timeout and gk and key_val is not None:
+                    if (
+                        rec["status"] == "timeout"
+                        and cfg.limits.prune_on_timeout
+                        and gk
+                        and key_val is not None
+                    ):
                         timed_out_keys.add(key_val)
 
 
@@ -276,8 +293,12 @@ def _run_parallel(
                 for params in points:
                     fut = pool.submit(
                         _run_grid_point,
-                        bench, params, cfg.limits.timeout_sec,
-                        cfg.limits.warmups, cfg.limits.repeats, retries,
+                        bench,
+                        params,
+                        cfg.limits.timeout_sec,
+                        cfg.limits.warmups,
+                        cfg.limits.repeats,
+                        retries,
                     )
                     future_to_params[fut] = params
 
@@ -287,17 +308,19 @@ def _run_parallel(
                         results = fut.result()
                     except Exception as exc:
                         # If a worker crashes, record an error
-                        results = [{
-                            "bench": bench.name,
-                            "cmd": format_cmd(bench.cmd, params),
-                            "params": params,
-                            "ts": datetime.now(timezone.utc).isoformat(),
-                            "status": "error",
-                            "rc": None,
-                            "wall_ms": 0.0,
-                            "peak_rss_mb": 0.0,
-                            "stderr": str(exc),
-                        }]
+                        results = [
+                            {
+                                "bench": bench.name,
+                                "cmd": format_cmd(bench.cmd, params),
+                                "params": params,
+                                "ts": datetime.now(timezone.utc).isoformat(),
+                                "status": "error",
+                                "rc": None,
+                                "wall_ms": 0.0,
+                                "peak_rss_mb": 0.0,
+                                "stderr": str(exc),
+                            }
+                        ]
 
                     with lock:
                         for i, rec in enumerate(results):
