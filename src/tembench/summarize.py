@@ -48,6 +48,7 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
             upper = q3 + 1.5 * iqr
             mask = (ok["wall_ms"] >= lower) & (ok["wall_ms"] <= upper)
             ok = ok[mask]
+
     def p10(s: pd.Series) -> float:
         return s.quantile(0.1)
 
@@ -66,6 +67,11 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
     g = g.reset_index()
     # add counts of failures
     if "status" in df.columns:
-        counts = df.groupby(group_cols + ["status"]).size().unstack(fill_value=0).reset_index()
+        counts = (
+            df.groupby(group_cols + ["status"])
+            .size()
+            .unstack(fill_value=0)
+            .reset_index()
+        )
         g = g.merge(counts, on=group_cols, how="left")
     return g

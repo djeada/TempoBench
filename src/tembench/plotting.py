@@ -13,7 +13,16 @@ from .complexity import fit_models, predict_series
 # Shared theme
 # ---------------------------------------------------------------------------
 
-_PALETTE = ["#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#be185d", "#65a30d"]
+_PALETTE = [
+    "#2563eb",
+    "#dc2626",
+    "#16a34a",
+    "#d97706",
+    "#7c3aed",
+    "#0891b2",
+    "#be185d",
+    "#65a30d",
+]
 
 
 def _apply_theme() -> None:
@@ -22,7 +31,12 @@ def _apply_theme() -> None:
         "config": {
             "background": "#ffffff",
             "font": "Inter, system-ui, -apple-system, sans-serif",
-            "title": {"fontSize": 16, "fontWeight": 600, "anchor": "start", "offset": 12},
+            "title": {
+                "fontSize": 16,
+                "fontWeight": 600,
+                "anchor": "start",
+                "offset": 12,
+            },
             "axis": {
                 "labelFontSize": 12,
                 "titleFontSize": 13,
@@ -52,9 +66,11 @@ def _apply_theme() -> None:
 
     # Use new API (altair ≥5.5) when available, fall back to legacy
     if hasattr(alt, "theme") and hasattr(alt.theme, "register"):
+
         @alt.theme.register("tempobench", enable=True)
         def _tb_theme():
             return alt.theme.ThemeConfig(theme_config)
+
     else:
         alt.themes.register("tempobench", lambda: theme_config)
         alt.themes.enable("tempobench")
@@ -112,7 +128,9 @@ def plot_runtime(
     df = pd.read_csv(summary_csv)
     if bench is not None:
         if "bench" not in df.columns:
-            raise ValueError("Summary does not contain a 'bench' column; cannot filter by --bench.")
+            raise ValueError(
+                "Summary does not contain a 'bench' column; cannot filter by --bench."
+            )
         df = df[df["bench"] == bench].copy()
         if df.empty:
             raise ValueError(f"No rows found for bench='{bench}'.")
@@ -127,31 +145,52 @@ def plot_runtime(
 
     # Shared color scale — same color for each impl across data + fit
     impl_values = sorted(df[color].unique()) if color in df.columns else []
-    shared_color_scale = alt.Scale(domain=impl_values, range=_PALETTE[:len(impl_values)]) if impl_values else None
+    shared_color_scale = (
+        alt.Scale(domain=impl_values, range=_PALETTE[: len(impl_values)])
+        if impl_values
+        else None
+    )
 
     # Interactive legend selection — click to toggle series visibility
-    legend_sel = alt.selection_point(name="rt_legend", fields=[color], bind="legend") if color in df.columns else None
+    legend_sel = (
+        alt.selection_point(name="rt_legend", fields=[color], bind="legend")
+        if color in df.columns
+        else None
+    )
 
     color_enc = (
-        alt.Color(color, title=_label(color), scale=shared_color_scale, legend=alt.Legend(
-            title="Implementation  (click to toggle)",
-            symbolType="cross",
-            symbolSize=150,
-            symbolStrokeWidth=2.5,
-        ))
+        alt.Color(
+            color,
+            title=_label(color),
+            scale=shared_color_scale,
+            legend=alt.Legend(
+                title="Implementation  (click to toggle)",
+                symbolType="cross",
+                symbolSize=150,
+                symbolStrokeWidth=2.5,
+            ),
+        )
         if color in df.columns
         else alt.value(_PALETTE[0])
     )
 
     # Nearest-point selection for interactive crosshair tooltip
     nearest = alt.selection_point(
-        name="rt_nearest", nearest=True, on="pointerover", fields=[x], empty=False,
+        name="rt_nearest",
+        nearest=True,
+        on="pointerover",
+        fields=[x],
+        empty=False,
     )
 
     tooltips = [
         alt.Tooltip(x, title=_label(x), format=","),
         alt.Tooltip(y_col, title=_label(y_col), format=".2f"),
-        alt.Tooltip(color, title=_label(color)) if color in df.columns else alt.Tooltip(y_col),
+        (
+            alt.Tooltip(color, title=_label(color))
+            if color in df.columns
+            else alt.Tooltip(y_col)
+        ),
     ]
     if "bench" in df.columns:
         tooltips.insert(0, alt.Tooltip("bench", title="Benchmark"))
@@ -164,7 +203,11 @@ def plot_runtime(
             x=x_enc,
             y=y_enc,
             color=color_enc,
-            opacity=alt.condition(legend_sel, alt.value(1.0), alt.value(0.08)) if legend_sel else alt.value(1.0),
+            opacity=(
+                alt.condition(legend_sel, alt.value(1.0), alt.value(0.08))
+                if legend_sel
+                else alt.value(1.0)
+            ),
             tooltip=tooltips,
         )
         .properties(width=640, height=400, title="Runtime vs Input Size")
@@ -191,12 +234,22 @@ def plot_runtime(
     # Highlighted dots at nearest x
     highlight_dots = (
         alt.Chart(df)
-        .mark_point(shape="circle", size=100, filled=True, strokeWidth=2, stroke="white")
+        .mark_point(
+            shape="circle", size=100, filled=True, strokeWidth=2, stroke="white"
+        )
         .encode(
             x=x_enc,
             y=y_enc,
-            color=alt.Color(color, scale=shared_color_scale, legend=None) if color in df.columns else alt.value(_PALETTE[0]),
-            opacity=alt.condition(legend_sel, alt.value(1.0), alt.value(0.0)) if legend_sel else alt.value(1.0),
+            color=(
+                alt.Color(color, scale=shared_color_scale, legend=None)
+                if color in df.columns
+                else alt.value(_PALETTE[0])
+            ),
+            opacity=(
+                alt.condition(legend_sel, alt.value(1.0), alt.value(0.0))
+                if legend_sel
+                else alt.value(1.0)
+            ),
         )
         .transform_filter(nearest)
     )
@@ -237,7 +290,11 @@ def plot_runtime(
             x=alt.X(x, title=_label(x), scale=x_scale, axis=alt.Axis(format="~s")),
             y=alt.Y("yhat", title=_label(y_col), scale=y_scale),
             color=fit_color_enc,
-            opacity=alt.condition(legend_sel, alt.value(0.7), alt.value(0.05)) if legend_sel else alt.value(0.7),
+            opacity=(
+                alt.condition(legend_sel, alt.value(0.7), alt.value(0.05))
+                if legend_sel
+                else alt.value(0.7)
+            ),
             detail=by_cols,
             tooltip=[
                 alt.Tooltip("model", title="Complexity"),
@@ -262,7 +319,9 @@ def plot_runtime(
         label_rows.append(row)
     label_points = pd.DataFrame(label_rows).reset_index(drop=True)
 
-    label_points = label_points.sort_values("yhat", ascending=False).reset_index(drop=True)
+    label_points = label_points.sort_values("yhat", ascending=False).reset_index(
+        drop=True
+    )
     n_labels = len(label_points)
     dy_offsets = [-14 - i * 16 for i in range(n_labels)]
     label_points["_dy"] = dy_offsets
@@ -274,8 +333,16 @@ def plot_runtime(
             x=x,
             y=alt.Y("yhat:Q", scale=y_scale),
             text="_label:N",
-            color=alt.Color(color, scale=shared_color_scale, legend=None) if color in label_points.columns else alt.value(_PALETTE[0]),
-            opacity=alt.condition(legend_sel, alt.value(1.0), alt.value(0.05)) if legend_sel else alt.value(1.0),
+            color=(
+                alt.Color(color, scale=shared_color_scale, legend=None)
+                if color in label_points.columns
+                else alt.value(_PALETTE[0])
+            ),
+            opacity=(
+                alt.condition(legend_sel, alt.value(1.0), alt.value(0.05))
+                if legend_sel
+                else alt.value(1.0)
+            ),
         )
     )
 
@@ -325,17 +392,30 @@ def plot_memory(
     y_col = _resolve_y(df, y, ["peak_rss_mb_median", "peak_rss_mb_mean", "peak_rss_mb"])
 
     if y_col not in df.columns:
-        return alt.Chart(pd.DataFrame()).mark_text().encode(text=alt.value("No memory data available"))
+        return (
+            alt.Chart(pd.DataFrame())
+            .mark_text()
+            .encode(text=alt.value("No memory data available"))
+        )
 
     x_scale = alt.Scale(type="log") if log_x else alt.Scale(zero=True)
     y_scale = alt.Scale(type="log") if log_y else alt.Scale(zero=True)
 
-    legend_sel = alt.selection_point(name="mem_legend", fields=[color], bind="legend") if color in df.columns else None
+    legend_sel = (
+        alt.selection_point(name="mem_legend", fields=[color], bind="legend")
+        if color in df.columns
+        else None
+    )
 
     color_enc = (
-        alt.Color(color, title=_label(color), scale=alt.Scale(range=_PALETTE), legend=alt.Legend(
-            title="Implementation  (click to toggle)",
-        ))
+        alt.Color(
+            color,
+            title=_label(color),
+            scale=alt.Scale(range=_PALETTE),
+            legend=alt.Legend(
+                title="Implementation  (click to toggle)",
+            ),
+        )
         if color in df.columns
         else alt.value(_PALETTE[2])
     )
@@ -347,7 +427,11 @@ def plot_memory(
             x=alt.X(x, title=_label(x), scale=x_scale, axis=alt.Axis(format="~s")),
             y=alt.Y(y_col, title=_label(y_col), scale=y_scale),
             color=color_enc,
-            opacity=alt.condition(legend_sel, alt.value(1.0), alt.value(0.08)) if legend_sel else alt.value(1.0),
+            opacity=(
+                alt.condition(legend_sel, alt.value(1.0), alt.value(0.08))
+                if legend_sel
+                else alt.value(1.0)
+            ),
             tooltip=[
                 alt.Tooltip(x, title=_label(x), format=","),
                 alt.Tooltip(y_col, title=_label(y_col), format=".2f"),
@@ -375,7 +459,11 @@ def plot_heatmap(
     df = pd.read_csv(summary_csv)
 
     if x not in df.columns or y not in df.columns:
-        return alt.Chart(pd.DataFrame()).mark_text().encode(text=alt.value("Insufficient data for heatmap"))
+        return (
+            alt.Chart(pd.DataFrame())
+            .mark_text()
+            .encode(text=alt.value("Insufficient data for heatmap"))
+        )
 
     value_col = _resolve_y(df, value, ["wall_ms_median", "wall_ms_mean"])
 
@@ -389,7 +477,9 @@ def plot_heatmap(
                 f"{value_col}:Q",
                 title=_label(value_col),
                 scale=alt.Scale(scheme="blues"),
-                legend=alt.Legend(direction="horizontal", orient="bottom", gradientLength=300),
+                legend=alt.Legend(
+                    direction="horizontal", orient="bottom", gradientLength=300
+                ),
             ),
             tooltip=[
                 alt.Tooltip(x, title=_label(x)),
@@ -443,21 +533,35 @@ def plot_boxplot(
                 continue
 
     if not rows:
-        return alt.Chart(pd.DataFrame()).mark_text().encode(text=alt.value("No successful runs for boxplot"))
+        return (
+            alt.Chart(pd.DataFrame())
+            .mark_text()
+            .encode(text=alt.value("No successful runs for boxplot"))
+        )
 
     df = pd.DataFrame(rows)
     if x not in df.columns or y not in df.columns:
-        return alt.Chart(pd.DataFrame()).mark_text().encode(text=alt.value("Required columns not found"))
+        return (
+            alt.Chart(pd.DataFrame())
+            .mark_text()
+            .encode(text=alt.value("Required columns not found"))
+        )
 
     highlight = alt.selection_point(name="box_highlight", fields=[x], bind="legend")
 
     chart = (
         alt.Chart(df)
-        .mark_boxplot(extent="min-max", size=40, median={"color": "white", "strokeWidth": 2})
+        .mark_boxplot(
+            extent="min-max", size=40, median={"color": "white", "strokeWidth": 2}
+        )
         .encode(
             x=alt.X(f"{x}:O", title=_label(x), axis=alt.Axis(labelAngle=0)),
             y=alt.Y(f"{y}:Q", title=_label(y), scale=alt.Scale(zero=True)),
-            color=alt.Color(f"{x}:N", title=_label(x) + "  (click to toggle)", scale=alt.Scale(range=_PALETTE)),
+            color=alt.Color(
+                f"{x}:N",
+                title=_label(x) + "  (click to toggle)",
+                scale=alt.Scale(range=_PALETTE),
+            ),
             opacity=alt.condition(highlight, alt.value(1.0), alt.value(0.12)),
         )
         .add_params(highlight)
@@ -481,9 +585,13 @@ def plot_comparison(
     base_col = f"{metric}_baseline"
 
     if curr_col not in comparison_df.columns or base_col not in comparison_df.columns:
-        return alt.Chart(pd.DataFrame()).mark_text().encode(text=alt.value("Comparison data not available"))
+        return (
+            alt.Chart(pd.DataFrame())
+            .mark_text()
+            .encode(text=alt.value("Comparison data not available"))
+        )
 
-    suffixes = ('_current', '_baseline', '_delta', '_delta_pct', '_regression')
+    suffixes = ("_current", "_baseline", "_delta", "_delta_pct", "_regression")
     id_vars = [c for c in comparison_df.columns if not c.endswith(suffixes)]
     df_melted = comparison_df.melt(
         id_vars=id_vars,
@@ -491,9 +599,13 @@ def plot_comparison(
         var_name="version",
         value_name="value",
     )
-    df_melted["version"] = df_melted["version"].map({curr_col: "Current", base_col: "Baseline"})
+    df_melted["version"] = df_melted["version"].map(
+        {curr_col: "Current", base_col: "Baseline"}
+    )
 
-    x_col = group if group in df_melted.columns else (id_vars[0] if id_vars else "index")
+    x_col = (
+        group if group in df_melted.columns else (id_vars[0] if id_vars else "index")
+    )
 
     ver_sel = alt.selection_point(name="cmp_version", fields=["version"], bind="legend")
 
@@ -506,7 +618,9 @@ def plot_comparison(
             color=alt.Color(
                 "version:N",
                 title="Version  (click to toggle)",
-                scale=alt.Scale(domain=["Baseline", "Current"], range=["#94a3b8", "#2563eb"]),
+                scale=alt.Scale(
+                    domain=["Baseline", "Current"], range=["#94a3b8", "#2563eb"]
+                ),
             ),
             opacity=alt.condition(ver_sel, alt.value(1.0), alt.value(0.12)),
             xOffset="version:N",
@@ -540,10 +654,16 @@ def create_dashboard(
     df = pd.read_csv(summary_csv)
     charts: list[alt.Chart] = []
 
-    charts.append(plot_runtime(summary_csv, x=x, color=color, show_fit=True, log_x=log_x, log_y=log_y))
+    charts.append(
+        plot_runtime(
+            summary_csv, x=x, color=color, show_fit=True, log_x=log_x, log_y=log_y
+        )
+    )
 
     if "peak_rss_mb_median" in df.columns or "peak_rss_mb_mean" in df.columns:
-        charts.append(plot_memory(summary_csv, x=x, color=color, log_x=log_x, log_y=log_y))
+        charts.append(
+            plot_memory(summary_csv, x=x, color=color, log_x=log_x, log_y=log_y)
+        )
 
     if color in df.columns and x in df.columns:
         charts.append(plot_heatmap(summary_csv, x=x, y=color))
@@ -556,7 +676,11 @@ def create_dashboard(
 
     return (
         alt.vconcat(*charts)
-        .properties(title=alt.TitleParams(text=title, fontSize=20, fontWeight=700, anchor="middle", dy=-10))
+        .properties(
+            title=alt.TitleParams(
+                text=title, fontSize=20, fontWeight=700, anchor="middle", dy=-10
+            )
+        )
         .configure_concat(spacing=40)
     )
 
@@ -590,4 +714,6 @@ def save_chart(
             chart.save(html_path)
             return str(html_path)
     else:
-        raise ValueError(f"Unsupported format: {fmt}. Use 'html', 'json', 'png', or 'svg'.")
+        raise ValueError(
+            f"Unsupported format: {fmt}. Use 'html', 'json', 'png', or 'svg'."
+        )

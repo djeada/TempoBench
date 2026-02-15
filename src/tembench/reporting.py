@@ -1,4 +1,5 @@
 """HTML report generation for TempoBench."""
+
 from __future__ import annotations
 
 import json
@@ -56,7 +57,6 @@ _COL_LABELS = {
     "baseline": "Baseline",
     "offset": "Offset",
     "formula": "Upper Bound",
-
     "rss": "RSS",
     "nobs": "Obs",
 }
@@ -85,7 +85,10 @@ def _fmt_val(val, col: str) -> str:
 # HTML building blocks
 # ---------------------------------------------------------------------------
 
-def _table_html(df: pd.DataFrame, cls: str = "data-table", highlight_col: str | None = None) -> str:
+
+def _table_html(
+    df: pd.DataFrame, cls: str = "data-table", highlight_col: str | None = None
+) -> str:
     """Render a DataFrame as a styled HTML table."""
     if df.empty:
         return '<p class="empty-msg">No data available.</p>'
@@ -120,7 +123,7 @@ def _extract_vega_spec(chart_html_text: str) -> str | None:
 
     Returns the spec as a string, or None if not found.
     """
-    m = re.search(r'var\s+spec\s*=\s*(\{.*?\});\s*\n', chart_html_text, re.DOTALL)
+    m = re.search(r"var\s+spec\s*=\s*(\{.*?\});\s*\n", chart_html_text, re.DOTALL)
     if m:
         return m.group(1)
     return None
@@ -449,6 +452,7 @@ _THEME_TOGGLE_HTML = """\
 # Main report
 # ---------------------------------------------------------------------------
 
+
 def generate_report(
     summary_csv: Path,
     runs_jsonl: Optional[Path] = None,
@@ -468,7 +472,9 @@ def generate_report(
         cards.append(_stat_card(f"{df['wall_ms_median'].max():.1f} ms", "Slowest"))
         cards.append(_stat_card(f"{df['wall_ms_median'].mean():.1f} ms", "Average"))
     if "peak_rss_mb_median" in df.columns:
-        cards.append(_stat_card(f"{df['peak_rss_mb_median'].max():.1f} MB", "Peak Memory"))
+        cards.append(
+            _stat_card(f"{df['peak_rss_mb_median'].max():.1f} MB", "Peak Memory")
+        )
     cards.append(_stat_card(str(len(df)), "Configurations"))
     overview_cards = "\n".join(cards)
 
@@ -617,6 +623,7 @@ def generate_report(
 # Comparison helpers
 # ---------------------------------------------------------------------------
 
+
 def compare_summaries(
     current_csv: Path,
     baseline_csv: Path,
@@ -626,29 +633,51 @@ def compare_summaries(
     current = pd.read_csv(current_csv)
     baseline = pd.read_csv(baseline_csv)
 
-    group_cols = [c for c in ["bench", "impl", "n"] if c in current.columns and c in baseline.columns]
+    group_cols = [
+        c
+        for c in ["bench", "impl", "n"]
+        if c in current.columns and c in baseline.columns
+    ]
     if not group_cols:
         group_cols = ["bench"] if "bench" in current.columns else []
     if not group_cols:
         return pd.DataFrame()
 
-    merged = current.merge(baseline, on=group_cols, suffixes=("_current", "_baseline"), how="outer")
+    merged = current.merge(
+        baseline, on=group_cols, suffixes=("_current", "_baseline"), how="outer"
+    )
     result_cols = list(group_cols)
 
     for metric in ["wall_ms_median", "wall_ms_mean"]:
         curr_col, base_col = f"{metric}_current", f"{metric}_baseline"
         if curr_col in merged.columns and base_col in merged.columns:
             merged[f"{metric}_delta"] = merged[curr_col] - merged[base_col]
-            merged[f"{metric}_delta_pct"] = ((merged[curr_col] - merged[base_col]) / merged[base_col] * 100).round(2)
-            merged[f"{metric}_regression"] = merged[f"{metric}_delta_pct"] > threshold_pct
-            result_cols.extend([curr_col, base_col, f"{metric}_delta", f"{metric}_delta_pct", f"{metric}_regression"])
+            merged[f"{metric}_delta_pct"] = (
+                (merged[curr_col] - merged[base_col]) / merged[base_col] * 100
+            ).round(2)
+            merged[f"{metric}_regression"] = (
+                merged[f"{metric}_delta_pct"] > threshold_pct
+            )
+            result_cols.extend(
+                [
+                    curr_col,
+                    base_col,
+                    f"{metric}_delta",
+                    f"{metric}_delta_pct",
+                    f"{metric}_regression",
+                ]
+            )
 
     for metric in ["peak_rss_mb_median", "peak_rss_mb_mean"]:
         curr_col, base_col = f"{metric}_current", f"{metric}_baseline"
         if curr_col in merged.columns and base_col in merged.columns:
             merged[f"{metric}_delta"] = merged[curr_col] - merged[base_col]
-            merged[f"{metric}_delta_pct"] = ((merged[curr_col] - merged[base_col]) / merged[base_col] * 100).round(2)
-            result_cols.extend([curr_col, base_col, f"{metric}_delta", f"{metric}_delta_pct"])
+            merged[f"{metric}_delta_pct"] = (
+                (merged[curr_col] - merged[base_col]) / merged[base_col] * 100
+            ).round(2)
+            result_cols.extend(
+                [curr_col, base_col, f"{metric}_delta", f"{metric}_delta_pct"]
+            )
 
     result_cols = [c for c in result_cols if c in merged.columns]
     return merged[result_cols]
@@ -657,6 +686,7 @@ def compare_summaries(
 # ---------------------------------------------------------------------------
 # Comparison report
 # ---------------------------------------------------------------------------
+
 
 def generate_comparison_report(
     comparison_df: pd.DataFrame,
@@ -672,7 +702,9 @@ def generate_comparison_report(
     total_configs = len(comparison_df)
 
     delta_pct_cols = [c for c in comparison_df.columns if c.endswith("_delta_pct")]
-    improvements = sum((comparison_df[col] < -threshold_pct).sum() for col in delta_pct_cols)
+    improvements = sum(
+        (comparison_df[col] < -threshold_pct).sum() for col in delta_pct_cols
+    )
 
     # Build comparison table with conditional styling
     tbl = ['<div class="table-wrap"><table class="data-table">']
@@ -710,7 +742,11 @@ def generate_comparison_report(
 
     banner_cls = "pass" if total_regressions == 0 else "fail"
     banner_icon = "✓" if total_regressions == 0 else "⚠"
-    banner_text = "No regressions detected" if total_regressions == 0 else f"{int(total_regressions)} regression{'s' if total_regressions != 1 else ''} detected"
+    banner_text = (
+        "No regressions detected"
+        if total_regressions == 0
+        else f"{int(total_regressions)} regression{'s' if total_regressions != 1 else ''} detected"
+    )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">

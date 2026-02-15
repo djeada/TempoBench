@@ -58,6 +58,7 @@ def _basis_functions() -> Dict[str, Callable[[float], float]]:
 # Formatting
 # ---------------------------------------------------------------------------
 
+
 def _format_coeff(v: float) -> str:
     if abs(v) >= 100:
         return f"{v:.1f}"
@@ -97,6 +98,7 @@ def _format_formula(model: str, C: float, effective_baseline: float = 0.0) -> st
 # ---------------------------------------------------------------------------
 # OLS fitting
 # ---------------------------------------------------------------------------
+
 
 def _ols_fit(
     x: List[float], y: List[float], basis: Callable[[float], float]
@@ -290,8 +292,11 @@ def _select_model(x: List[float], y: List[float]) -> str:
 
 
 def _upper_bound_offset(
-    x: List[float], y: List[float], basis: Callable[[float], float],
-    C: float, baseline: float,
+    x: List[float],
+    y: List[float],
+    basis: Callable[[float], float],
+    C: float,
+    baseline: float,
 ) -> float:
     """Compute offset so that C·f(n) + baseline + offset ≥ y_i for all points."""
     max_above = 0.0
@@ -356,21 +361,25 @@ def fit_models(df: pd.DataFrame, x_col: str, y_col: str, by: List[str]) -> pd.Da
             rec[by[0]] = keys
 
         eff_baseline = baseline + offset
-        rec.update({
-            "model": model,
-            "C": C,
-            "baseline": baseline,
-            "offset": offset,
-            "formula": _format_formula(model, C, eff_baseline),
-            "rss": rss,
-            "nobs": len(group),
-        })
+        rec.update(
+            {
+                "model": model,
+                "C": C,
+                "baseline": baseline,
+                "offset": offset,
+                "formula": _format_formula(model, C, eff_baseline),
+                "rss": rss,
+                "nobs": len(group),
+            }
+        )
         results.append(rec)
 
     return pd.DataFrame(results)
 
 
-def predict_series(df: pd.DataFrame, fits: pd.DataFrame, x_col: str, by: List[str]) -> pd.DataFrame:
+def predict_series(
+    df: pd.DataFrame, fits: pd.DataFrame, x_col: str, by: List[str]
+) -> pd.DataFrame:
     """Generate upper-bound predictions per group.
 
     The curve is y = C·f(n) + baseline + offset, which guarantees the
@@ -397,7 +406,15 @@ def predict_series(df: pd.DataFrame, fits: pd.DataFrame, x_col: str, by: List[st
         xs = sorted(pd.unique(sub[x_col].astype(float).values))
         if len(xs) < 2:
             for xv in xs:
-                preds.append({**key, x_col: xv, "yhat": C * fn(xv) + eff_baseline, "model": model, "formula": formula})
+                preds.append(
+                    {
+                        **key,
+                        x_col: xv,
+                        "yhat": C * fn(xv) + eff_baseline,
+                        "model": model,
+                        "formula": formula,
+                    }
+                )
             continue
 
         x_min, x_max = xs[0], xs[-1]
@@ -407,6 +424,8 @@ def predict_series(df: pd.DataFrame, fits: pd.DataFrame, x_col: str, by: List[st
 
         for xv in smooth_xs:
             yhat = C * fn(xv) + eff_baseline
-            preds.append({**key, x_col: xv, "yhat": yhat, "model": model, "formula": formula})
+            preds.append(
+                {**key, x_col: xv, "yhat": yhat, "model": model, "formula": formula}
+            )
 
     return pd.DataFrame(preds)

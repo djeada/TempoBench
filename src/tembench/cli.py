@@ -8,7 +8,13 @@ from typing import Optional
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+)
 from rich.table import Table
 
 from .complexity import fit_models
@@ -40,13 +46,19 @@ console = Console()
 
 @app.command()
 def run(
-    config: Path = typer.Option(..., exists=True, dir_okay=False, help="Path to YAML config"),
+    config: Path = typer.Option(
+        ..., exists=True, dir_okay=False, help="Path to YAML config"
+    ),
     out_dir: Path = typer.Option(Path("artifacts"), help="Directory for artifacts"),
     seed: int = typer.Option(42, help="Random seed for sweep order"),
     retries: int = typer.Option(0, help="Retries per failed repetition"),
-    append: bool = typer.Option(False, help="Append to existing runs.jsonl instead of overwriting it"),
+    append: bool = typer.Option(
+        False, help="Append to existing runs.jsonl instead of overwriting it"
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output"),
-    workers: int = typer.Option(0, "--workers", "-j", help="Parallel workers (0 = use config value, default 1)"),
+    workers: int = typer.Option(
+        0, "--workers", "-j", help="Parallel workers (0 = use config value, default 1)"
+    ),
 ):
     """Execute configured benchmarks and write JSONL results.
 
@@ -65,11 +77,16 @@ def run(
         console.print(f"[dim]Config:[/dim] {config}")
         console.print(f"[dim]Output:[/dim] {out_dir}")
         if cfg.limits.workers > 1:
-            console.print(f"[dim]Workers:[/dim] {cfg.limits.workers}  [yellow]⚠ parallel mode — timings may have cross-talk[/yellow]")
+            console.print(
+                f"[dim]Workers:[/dim] {cfg.limits.workers}  [yellow]⚠ parallel mode — timings may have cross-talk[/yellow]"
+            )
         console.print()
 
     from .runner import expand_grid
-    total_trials = len(cfg.benchmarks) * len(expand_grid(cfg.grid)) * max(1, cfg.limits.repeats)
+
+    total_trials = (
+        len(cfg.benchmarks) * len(expand_grid(cfg.grid)) * max(1, cfg.limits.repeats)
+    )
 
     if not quiet:
         progress = Progress(
@@ -86,7 +103,14 @@ def run(
             progress.update(task_id, advance=1, description=label)
 
         with progress:
-            run_benchmarks(cfg, results_path, seed=seed, retries=retries, on_trial=on_trial, append=append)
+            run_benchmarks(
+                cfg,
+                results_path,
+                seed=seed,
+                retries=retries,
+                on_trial=on_trial,
+                append=append,
+            )
     else:
         run_benchmarks(cfg, results_path, seed=seed, retries=retries, append=append)
 
@@ -101,9 +125,13 @@ def run(
 
 @app.command()
 def summarize(
-    runs: Path = typer.Option(Path("artifacts/runs.jsonl"), exists=True, dir_okay=False),
+    runs: Path = typer.Option(
+        Path("artifacts/runs.jsonl"), exists=True, dir_okay=False
+    ),
     out_csv: Path = typer.Option(Path("artifacts/summary.csv"), dir_okay=False),
-    include_outliers: bool = typer.Option(False, help="Include outliers in medians/means"),
+    include_outliers: bool = typer.Option(
+        False, help="Include outliers in medians/means"
+    ),
 ):
     """Summarize JSONL runs into CSV with medians and percentiles."""
     df = summarize_runs(runs, include_outliers=include_outliers)
@@ -114,19 +142,34 @@ def summarize(
 
 @app.command()
 def plot(
-    summary: Path = typer.Option(Path("artifacts/summary.csv"), exists=True, dir_okay=False),
+    summary: Path = typer.Option(
+        Path("artifacts/summary.csv"), exists=True, dir_okay=False
+    ),
     x: str = typer.Option("n", help="X axis parameter"),
     y: str = typer.Option("wall_ms_median", help="Y axis metric"),
     color: str = typer.Option("impl", help="Series grouping column"),
-    bench: Optional[str] = typer.Option(None, help="Optional benchmark name filter (column: bench)"),
+    bench: Optional[str] = typer.Option(
+        None, help="Optional benchmark name filter (column: bench)"
+    ),
     out_html: Optional[Path] = typer.Option(Path("artifacts/runtime.html")),
     no_fit: bool = typer.Option(False, help="Disable Big-O fit overlay"),
-    export_fits: Optional[Path] = typer.Option(None, help="Optional path to save fitted models CSV"),
+    export_fits: Optional[Path] = typer.Option(
+        None, help="Optional path to save fitted models CSV"
+    ),
     log_x: bool = typer.Option(False, help="Use log scale for X axis"),
     log_y: bool = typer.Option(False, help="Use log scale for Y axis"),
 ):
     """Create a simple runtime plot from the summary CSV."""
-    chart = plot_runtime(summary, x=x, y=y, color=color, bench=bench, show_fit=not no_fit, log_x=log_x, log_y=log_y)
+    chart = plot_runtime(
+        summary,
+        x=x,
+        y=y,
+        color=color,
+        bench=bench,
+        show_fit=not no_fit,
+        log_x=log_x,
+        log_y=log_y,
+    )
     if out_html:
         out_html.parent.mkdir(parents=True, exist_ok=True)
         chart.save(out_html)
@@ -136,10 +179,15 @@ def plot(
         json.dump(chart.to_dict(), sys.stdout)
     if export_fits:
         import pandas as pd
+
         df = pd.read_csv(summary)
         by = [c for c in ["bench", color] if c in df.columns]
-        y_fit = y if y in df.columns else (
-            "wall_ms_median" if "wall_ms_median" in df.columns else "wall_ms_mean"
+        y_fit = (
+            y
+            if y in df.columns
+            else (
+                "wall_ms_median" if "wall_ms_median" in df.columns else "wall_ms_mean"
+            )
         )
         fits = fit_models(df, x_col=x, y_col=y_fit, by=by or [color])
         fits.to_csv(export_fits, index=False)
@@ -148,9 +196,16 @@ def plot(
 
 @app.command()
 def inspect(
-    runs: Path = typer.Option(Path("artifacts/runs.jsonl"), exists=True, dir_okay=False, help="Path to JSONL runs"),
+    runs: Path = typer.Option(
+        Path("artifacts/runs.jsonl"),
+        exists=True,
+        dir_okay=False,
+        help="Path to JSONL runs",
+    ),
     count: int = typer.Option(10, "--count", "-n", help="Number of runs to show"),
-    status: Optional[str] = typer.Option(None, help="Filter by status (ok, failed, timeout)"),
+    status: Optional[str] = typer.Option(
+        None, help="Filter by status (ok, failed, timeout)"
+    ),
 ):
     """Quickly preview recent runs with detailed statistics.
 
@@ -187,8 +242,12 @@ def inspect(
     stats_table.add_column("", style="bold")
     stats_table.add_row("Total Runs", str(total))
     stats_table.add_row("Successful", f"[green]{ok_count}[/green]")
-    stats_table.add_row("Failed", f"[red]{failed_count}[/red]" if failed_count > 0 else "0")
-    stats_table.add_row("Timeouts", f"[yellow]{timeout_count}[/yellow]" if timeout_count > 0 else "0")
+    stats_table.add_row(
+        "Failed", f"[red]{failed_count}[/red]" if failed_count > 0 else "0"
+    )
+    stats_table.add_row(
+        "Timeouts", f"[yellow]{timeout_count}[/yellow]" if timeout_count > 0 else "0"
+    )
 
     console.print(Panel(stats_table, title="Run Statistics", border_style="blue"))
     console.print()
@@ -232,12 +291,21 @@ def inspect(
 @app.command()
 def report(
     summary: Path = typer.Option(
-        Path("artifacts/summary.csv"), exists=True, dir_okay=False, help="Path to summary CSV"
+        Path("artifacts/summary.csv"),
+        exists=True,
+        dir_okay=False,
+        help="Path to summary CSV",
     ),
     runs: Optional[Path] = typer.Option(None, help="Path to raw JSONL runs (optional)"),
-    fits: Optional[Path] = typer.Option(None, help="Path to complexity fits CSV (optional)"),
-    chart: Optional[Path] = typer.Option(None, help="Path to pre-generated chart HTML (optional)"),
-    output: Path = typer.Option(Path("artifacts/report.html"), help="Output path for HTML report"),
+    fits: Optional[Path] = typer.Option(
+        None, help="Path to complexity fits CSV (optional)"
+    ),
+    chart: Optional[Path] = typer.Option(
+        None, help="Path to pre-generated chart HTML (optional)"
+    ),
+    output: Path = typer.Option(
+        Path("artifacts/report.html"), help="Output path for HTML report"
+    ),
     title: str = typer.Option("TempoBench Report", help="Report title"),
 ):
     """Generate a comprehensive HTML report with charts, tables, and system info.
@@ -290,11 +358,19 @@ def report(
 
 @app.command()
 def compare(
-    current: Path = typer.Option(..., exists=True, dir_okay=False, help="Path to current summary CSV"),
-    baseline: Path = typer.Option(..., exists=True, dir_okay=False, help="Path to baseline summary CSV"),
+    current: Path = typer.Option(
+        ..., exists=True, dir_okay=False, help="Path to current summary CSV"
+    ),
+    baseline: Path = typer.Option(
+        ..., exists=True, dir_okay=False, help="Path to baseline summary CSV"
+    ),
     threshold: float = typer.Option(5.0, help="Regression threshold percentage"),
-    output: Path = typer.Option(Path("artifacts/comparison.html"), help="Output path for comparison report"),
-    output_csv: Optional[Path] = typer.Option(None, help="Optional path to save comparison CSV"),
+    output: Path = typer.Option(
+        Path("artifacts/comparison.html"), help="Output path for comparison report"
+    ),
+    output_csv: Optional[Path] = typer.Option(
+        None, help="Optional path to save comparison CSV"
+    ),
 ):
     """Compare current benchmark results against a baseline to detect regressions.
 
@@ -317,11 +393,13 @@ def compare(
     comparison_df = compare_summaries(current, baseline, threshold_pct=threshold)
 
     if comparison_df.empty:
-        console.print("[yellow]⚠[/yellow] No comparable data found between current and baseline.")
+        console.print(
+            "[yellow]⚠[/yellow] No comparable data found between current and baseline."
+        )
         raise typer.Exit(1)
 
     # Check for regressions
-    regression_cols = [c for c in comparison_df.columns if c.endswith('_regression')]
+    regression_cols = [c for c in comparison_df.columns if c.endswith("_regression")]
     total_regressions = 0
     for col in regression_cols:
         total_regressions += comparison_df[col].sum()
@@ -338,37 +416,52 @@ def compare(
     if output_csv:
         output_csv.parent.mkdir(parents=True, exist_ok=True)
         comparison_df.to_csv(output_csv, index=False)
-        console.print(f"[green]✓[/green] Comparison CSV saved to [bold]{output_csv}[/bold]")
+        console.print(
+            f"[green]✓[/green] Comparison CSV saved to [bold]{output_csv}[/bold]"
+        )
 
     console.print(f"[green]✓[/green] Comparison report saved to [bold]{output}[/bold]")
 
     if total_regressions > 0:
         console.print()
-        console.print(Panel(
-            f"[red bold]⚠ {int(total_regressions)} regression(s) detected![/red bold]\n\n"
-            f"Performance degraded by more than {threshold}% in {int(total_regressions)} configuration(s).\n"
-            "Review the comparison report for details.",
-            title="Regression Alert",
-            border_style="red",
-        ))
+        console.print(
+            Panel(
+                f"[red bold]⚠ {int(total_regressions)} regression(s) detected![/red bold]\n\n"
+                f"Performance degraded by more than {threshold}% in {int(total_regressions)} configuration(s).\n"
+                "Review the comparison report for details.",
+                title="Regression Alert",
+                border_style="red",
+            )
+        )
         raise typer.Exit(1)
     else:
         console.print()
-        console.print(Panel(
-            "[green bold]✓ No regressions detected[/green bold]\n\n"
-            "All configurations are within the acceptable threshold.",
-            title="Comparison Passed",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                "[green bold]✓ No regressions detected[/green bold]\n\n"
+                "All configurations are within the acceptable threshold.",
+                title="Comparison Passed",
+                border_style="green",
+            )
+        )
 
 
 @app.command()
 def dashboard(
-    summary: Path = typer.Option(Path("artifacts/summary.csv"), exists=True, dir_okay=False, help="Path to summary CSV"),
-    runs: Optional[Path] = typer.Option(None, help="Path to raw JSONL runs (optional, for boxplots)"),
+    summary: Path = typer.Option(
+        Path("artifacts/summary.csv"),
+        exists=True,
+        dir_okay=False,
+        help="Path to summary CSV",
+    ),
+    runs: Optional[Path] = typer.Option(
+        None, help="Path to raw JSONL runs (optional, for boxplots)"
+    ),
     x: str = typer.Option("n", help="X axis parameter"),
     color: str = typer.Option("impl", help="Series grouping column"),
-    output: Path = typer.Option(Path("artifacts/dashboard.html"), help="Output path for dashboard"),
+    output: Path = typer.Option(
+        Path("artifacts/dashboard.html"), help="Output path for dashboard"
+    ),
     title: str = typer.Option("TempoBench Dashboard", help="Dashboard title"),
     log_x: bool = typer.Option(False, help="Use log scale for X axis"),
     log_y: bool = typer.Option(False, help="Use log scale for Y axis"),
@@ -435,7 +528,10 @@ def sysinfo():
     table.add_row("Python", info["python_version"])
     table.add_row("Processor", info["processor"] or "N/A")
     table.add_row("Architecture", info["architecture"])
-    table.add_row("CPU Cores", f"{info['cpu_count_physical']} physical / {info['cpu_count_logical']} logical")
+    table.add_row(
+        "CPU Cores",
+        f"{info['cpu_count_physical']} physical / {info['cpu_count_logical']} logical",
+    )
     if "cpu_freq_mhz" in info:
         table.add_row("CPU Frequency", f"{info['cpu_freq_mhz']} MHz")
     table.add_row("Memory", f"{info['memory_total_gb']} GB")
@@ -448,10 +544,17 @@ def sysinfo():
 
 @app.command()
 def memory(
-    summary: Path = typer.Option(Path("artifacts/summary.csv"), exists=True, dir_okay=False, help="Path to summary CSV"),
+    summary: Path = typer.Option(
+        Path("artifacts/summary.csv"),
+        exists=True,
+        dir_okay=False,
+        help="Path to summary CSV",
+    ),
     x: str = typer.Option("n", help="X axis parameter"),
     color: str = typer.Option("impl", help="Series grouping column"),
-    output: Path = typer.Option(Path("artifacts/memory.html"), help="Output path for memory chart"),
+    output: Path = typer.Option(
+        Path("artifacts/memory.html"), help="Output path for memory chart"
+    ),
     log_x: bool = typer.Option(False, help="Use log scale for X axis"),
     log_y: bool = typer.Option(False, help="Use log scale for Y axis"),
 ):
@@ -470,11 +573,18 @@ def memory(
 
 @app.command()
 def heatmap(
-    summary: Path = typer.Option(Path("artifacts/summary.csv"), exists=True, dir_okay=False, help="Path to summary CSV"),
+    summary: Path = typer.Option(
+        Path("artifacts/summary.csv"),
+        exists=True,
+        dir_okay=False,
+        help="Path to summary CSV",
+    ),
     x: str = typer.Option("n", help="X axis parameter"),
     y: str = typer.Option("impl", help="Y axis parameter"),
     value: str = typer.Option("wall_ms_median", help="Value to display in cells"),
-    output: Path = typer.Option(Path("artifacts/heatmap.html"), help="Output path for heatmap"),
+    output: Path = typer.Option(
+        Path("artifacts/heatmap.html"), help="Output path for heatmap"
+    ),
 ):
     """Generate a performance heatmap from summary data.
 
