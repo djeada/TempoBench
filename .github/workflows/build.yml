@@ -167,17 +167,37 @@ jobs:
 
           # Windows uses standalone mode: package the full dist directory.
           if runner_os == "Windows":
-              standalone_dir = Path("dist/tembench.dist")
-              if standalone_dir.is_dir() and (standalone_dir / "tembench.exe").is_file():
+              # Try multiple possible locations for the standalone directory
+              standalone_candidates = [
+                  Path("dist/tembench.dist"),
+                  Path("dist") / "tembench.dist",
+              ]
+              
+              standalone_dir = None
+              for candidate in standalone_candidates:
+                  if candidate.is_dir():
+                      exe_path = candidate / "tembench.exe"
+                      if exe_path.is_file():
+                          standalone_dir = candidate
+                          print(f"Found standalone directory: {standalone_dir}")
+                          break
+              
+              if standalone_dir:
                   archive_base = release_dir / "tembench-windows"
                   archive = shutil.make_archive(
                       str(archive_base),
                       "zip",
-                      root_dir=standalone_dir.parent,
+                      root_dir=str(standalone_dir.parent),
                       base_dir=standalone_dir.name,
                   )
                   print(f"Packaged artifact: {archive}")
                   sys.exit(0)
+              else:
+                  print("Warning: Standalone directory not found, trying fallback...")
+                  # List dist contents for debugging
+                  print("Contents of dist/:")
+                  for item in Path("dist").rglob("*"):
+                      print(f"  {item}")
 
           expected = {
               "Windows": "dist/tembench.exe",
