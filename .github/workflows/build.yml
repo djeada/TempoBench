@@ -54,7 +54,8 @@ jobs:
               encoding="utf-8",
           )
 
-      - name: Build onefile executable
+      - name: Build onefile executable (Linux/macOS)
+        if: runner.os != 'Windows'
         run: >
           python -m nuitka
           --onefile
@@ -66,26 +67,46 @@ jobs:
           --enable-plugin=anti-bloat
           build/tembench_entry.py
 
+      - name: Build standalone executable (Windows)
+        if: runner.os == 'Windows'
+        run: >
+          python -m nuitka
+          --standalone
+          --assume-yes-for-downloads
+          --output-dir=dist
+          --output-filename=tembench
+          --include-package=tembench
+          --include-package-data=altair
+          --enable-plugin=anti-bloat
+          --windows-console-mode=force
+          --mingw64
+          build/tembench_entry.py
+
       - name: Verify built executable
         shell: python
         run: |
-          import glob
           import os
           import subprocess
           import sys
+          from pathlib import Path
 
           runner_os = os.environ["RUNNER_OS"]
-          expected = {
-              "Windows": "dist/tembench.exe",
-              "Linux": "dist/tembench",
-              "macOS": "dist/tembench",
+          expected_candidates = {
+              "Windows": [
+                  "dist/tembench.dist/tembench.exe",
+                  "dist/tembench.exe",
+              ],
+              "Linux": ["dist/tembench"],
+              "macOS": ["dist/tembench"],
           }[runner_os]
 
-          candidates = [expected] if os.path.isfile(expected) else []
+          candidates = [p for p in expected_candidates if os.path.isfile(p)]
           if not candidates:
+              wanted_name = "tembench.exe" if runner_os == "Windows" else "tembench"
               candidates = [
-                  p for p in sorted(glob.glob("dist/tembench*"))
-                  if os.path.isfile(p) and not p.endswith((".cmd", ".ps1"))
+                  str(p)
+                  for p in sorted(Path("dist").rglob(wanted_name))
+                  if p.is_file() and not str(p).endswith((".cmd", ".ps1"))
               ]
           if not candidates:
               print("No built executable found in dist/")
@@ -137,6 +158,24 @@ jobs:
           from pathlib import Path
 
           runner_os = os.environ["RUNNER_OS"]
+          release_dir = Path("release")
+          release_dir.mkdir(exist_ok=True)
+          os_slug = runner_os.lower()
+
+          # Windows uses standalone mode: package the full dist directory.
+          if runner_os == "Windows":
+              standalone_dir = Path("dist/tembench.dist")
+              if standalone_dir.is_dir() and (standalone_dir / "tembench.exe").is_file():
+                  archive_base = release_dir / "tembench-windows"
+                  archive = shutil.make_archive(
+                      str(archive_base),
+                      "zip",
+                      root_dir=standalone_dir.parent,
+                      base_dir=standalone_dir.name,
+                  )
+                  print(f"Packaged artifact: {archive}")
+                  sys.exit(0)
+
           expected = {
               "Windows": "dist/tembench.exe",
               "Linux": "dist/tembench",
@@ -154,10 +193,6 @@ jobs:
               sys.exit(1)
 
           src = src_candidates[0]
-          release_dir = Path("release")
-          release_dir.mkdir(exist_ok=True)
-
-          os_slug = runner_os.lower()
           ext = ".exe" if runner_os == "Windows" else ""
           dst = release_dir / f"tembench-{os_slug}{ext}"
           shutil.copy2(src, dst)
