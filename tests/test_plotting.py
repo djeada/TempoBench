@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -152,3 +153,18 @@ def test_create_dashboard_with_log_scales(tmp_path: Path):
     memory_spec = charts[1]
     assert memory_spec["encoding"]["x"]["scale"]["type"] == "log"
     assert memory_spec["encoding"]["y"]["scale"]["type"] == "log"
+
+
+def test_plot_runtime_strict_strategy_uses_display_model_field(tmp_path: Path):
+    summary = _write_summary(
+        tmp_path / "summary.csv",
+        [
+            {"bench": "a", "impl": "x", "n": 100, "wall_ms_median": 10.0 * 100 * (2.0 ** 0.1)},
+            {"bench": "a", "impl": "x", "n": 1000, "wall_ms_median": 10.0 * 1000 * (3.0 ** 0.5)},
+            {"bench": "a", "impl": "x", "n": 10000, "wall_ms_median": 10.0 * 10000 * (4.0 ** 0.5)},
+            {"bench": "a", "impl": "x", "n": 100000, "wall_ms_median": 10.0 * 100000 * (5.0 ** 0.5)},
+        ],
+    )
+    chart = plot_runtime(summary, bench="a", complexity_strategy="strict")
+    spec = chart.to_dict()
+    assert "display_model" in json.dumps(spec)

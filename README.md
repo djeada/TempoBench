@@ -118,7 +118,7 @@ All output is written to the `--out-dir` directory (default `artifacts/`):
 | `provenance.json` | JSON   | Seed, Python version, worker count, CLI invocation, working directory |
 | `summary.csv`     | CSV    | Median/mean/p10/p90 per grid point            |
 | `runtime.html`    | HTML   | Vega-Lite runtime chart with complexity overlay |
-| `fits.csv`        | CSV    | Best-fit model, coefficients, and RSS per series |
+| `fits.csv`        | CSV    | Best-fit model, exponent CI, coefficients, and RSS per series |
 | `report.html`     | HTML   | Full report with charts, tables, and system info |
 
 ## Complexity Fitting
@@ -132,10 +132,11 @@ The fitting algorithm uses a multi-layer approach:
 3. **Step-up OLS** — fit all models via OLS (`y = C·f(n) + baseline`), start from the simplest valid model, accept more complex only if RSS improves by a dynamic-range-dependent factor.
 4. **Tail-ratio guard** — for O(n) vs O(n log n) disambiguation, verify using the growth ratio at the two largest measured n values.
 
-The selected model is shifted up to form a proper **upper bound** — the fit line sits at or above every observed data point, as Big-O semantics require. The plot shows the Big-O class (e.g. `O(n log n)`) on the curve, and the legend shows the concrete bound formula (e.g. `T(n) ≤ 5.36e-05·n·log(n) + 55.7`).
+The selected model is shifted up to form a proper **upper bound** — the fit line sits at or above every observed data point, as Big-O semantics require. The plot shows the Big-O class (e.g. `O(n log n)`) on the curve, and the legend shows the concrete bound formula (e.g. `T(n) ≤ 5.36e-05·n·log(n) + 55.7`). Use `--complexity-strategy strict` to surface an empirical exponent band like `O(n^1.08±0.07)` when the confidence interval overlaps a neighboring class boundary.
 
 ```bash
 tembench plot --summary artifacts/summary.csv --export-fits artifacts/fits.csv
+tembench plot --summary artifacts/summary.csv --complexity-strategy strict
 tembench plot --summary artifacts/summary.csv --no-fit   # disable overlay
 ```
 
@@ -156,6 +157,7 @@ limits:
   timeout_sec: 30               # per-trial timeout (soft SIGTERM, then SIGKILL)
   warmups: 1                    # discarded warm-up runs per grid point
   repeats: 3                    # measured repetitions per grid point
+  rss_poll_interval_sec: 0.01   # RSS sampling cadence for peak-memory tracking
   workers: 1                    # parallel workers (1 = sequential, default)
   prune_on_timeout: false       # skip larger values after a timeout
   shuffle: true                 # randomize sweep order to reduce drift

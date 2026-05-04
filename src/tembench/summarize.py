@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
+from typing import Any, List, cast
 
 import pandas as pd
 
@@ -23,15 +23,21 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
+    param_cols: List[str] = []
     # explode params dict to columns
     if "params" in df.columns:
-        params_df = pd.json_normalize(df["params"]).add_prefix("")
+        params_records = cast(List[dict[str, Any]], df["params"].tolist())
+        params_df = pd.json_normalize(params_records)
+        param_cols = list(params_df.columns)
         df = pd.concat([df.drop(columns=["params"]), params_df], axis=1)
-    # focus on ok runs for medians but keep counts
-    group_cols = [c for c in ["bench", "impl", "n"] if c in df.columns]
+
+    # focus on bench + actual grid keys for medians and counts
+    group_cols = [c for c in ["bench"] if c in df.columns]
+    group_cols.extend(c for c in param_cols if c in df.columns and c not in group_cols)
     if not group_cols:
-        # fallback to bench only
-        group_cols = [c for c in ["bench"] if c in df.columns]
+        df = df.assign(_group_all="all")
+        group_cols = ["_group_all"]
+
     # Outlier filtering (Tukey)
     ok = df[df["status"] == "ok"] if "status" in df.columns else df
     if not include_outliers and not ok.empty and "wall_ms" in ok.columns:
@@ -62,8 +68,9 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
         "wall_ms": ["median", "mean", "count", p10, p90],
         "peak_rss_mb": ["median", "mean"],
     }
-    g = ok.groupby(group_cols, dropna=False).agg(agg)
-    g.columns = ["_".join(col) for col in g.columns.to_flat_index()]
+    g = ok.groupby(group_cols, dropna=False).agg(cast(Any, agg))
+    flat_columns = cast(Any, g.columns).to_flat_index()
+    g.columns = ["_".join(col) for col in flat_columns]
     g = g.reset_index()
     # add counts of failures
     if "status" in df.columns:
@@ -74,4 +81,6 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
             .reset_index()
         )
         g = g.merge(counts, on=group_cols, how="left")
+    if "_group_all" in g.columns:
+        g = g.drop(columns=["_group_all"])
     return g

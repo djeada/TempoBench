@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ProcessPoolExecutor as RealProcessPoolExecutor
 from pathlib import Path
 
+import tembench.runner.parallel as parallel_mod
 from tembench.config import Benchmark, Config, Limits
-from tembench.runner import _run_grid_point, expand_grid, format_cmd, run_benchmarks, run_once
+from tembench.runner import (
+    TrialResult,
+    _run_grid_point,
+    expand_grid,
+    format_cmd,
+    run_benchmarks,
+    run_once,
+)
 
 
 def test_expand_grid_single():
@@ -14,7 +23,7 @@ def test_expand_grid_single():
 
 
 def test_expand_grid_multi():
-    grid = {"n": [1, 2], "impl": ["a", "b"]}
+    grid: dict[str, list[object]] = {"n": [1, 2], "impl": ["a", "b"]}
     result = expand_grid(grid)
     assert len(result) == 4
     assert {"n": 1, "impl": "a"} in result
@@ -31,25 +40,38 @@ def test_format_cmd():
 
 def test_run_once_success():
     result = run_once("echo hello", {}, None, timeout=5.0)
-    assert result["status"] == "ok"
-    assert result["rc"] == 0
-    assert result["wall_ms"] > 0
-    assert "hello" in result["stdout"]
+    assert result.status == "ok"
+    assert result.rc == 0
+    assert result.wall_ms is not None and result.wall_ms > 0
+    assert result.stdout is not None and "hello" in result.stdout
 
 
 def test_run_once_failure():
     result = run_once("false", {}, None, timeout=5.0)
-    assert result["status"] == "failed"
+    assert result.status == "failed"
 
 
 def test_run_once_timeout():
     result = run_once("sleep 10", {}, None, timeout=0.2)
-    assert result["status"] == "timeout"
+    assert result.status == "timeout"
 
 
 def test_run_once_missing_command():
     result = run_once("nonexistent_cmd_xyz", {}, None, timeout=2.0)
-    assert result["status"] == "error"
+    assert result.status == "error"
+
+
+def test_trial_result_serialization_round_trip():
+    result = TrialResult(
+        ts="2025-01-01T00:00:00+00:00",
+        status="ok",
+        rc=0,
+        wall_ms=12.3,
+        peak_rss_mb=4.5,
+        stdout="done",
+        stderr="",
+    ).with_context(bench="bench", cmd="echo 1", params={"n": 1})
+    assert TrialResult.from_dict(result.to_dict()) == result
 
 
 def test_run_benchmarks_writes_jsonl(tmp_path: Path):
@@ -160,6 +182,65 @@ def test_run_benchmarks_parallel_repeats(tmp_path: Path):
     assert len(lines) == 3
 
 
+def test_run_benchmarks_prune_on_timeout_fires_skip_callbacks(tmp_path: Path):
+    cfg = Config(
+        benchmarks=[
+            Benchmark(name="skipcb", cmd='python3 -c "import time; time.sleep(0.2)"')
+        ],
+        grid={"n": [1, 2]},
+        limits=Limits(
+            timeout_sec=0.05,
+            warmups=0,
+            repeats=2,
+            shuffle=False,
+            prune_on_timeout=True,
+        ),
+    )
+    out = tmp_path / "runs.jsonl"
+    calls = []
+    run_benchmarks(cfg, out, seed=0, on_trial=lambda *a: calls.append(a))
+    assert len(calls) == 4
+    assert [call[4]["status"] for call in calls] == [
+        "timeout",
+        "timeout",
+        "skipped",
+        "skipped",
+    ]
+
+
+def test_run_benchmarks_parallel_uses_single_pool_for_multiple_benchmarks(
+    tmp_path: Path, monkeypatch
+):
+    created = 0
+
+    class CountingExecutor:
+        def __init__(self, *args, **kwargs):
+            nonlocal created
+            created += 1
+            self._inner = RealProcessPoolExecutor(*args, **kwargs)
+
+        def __enter__(self):
+            self._inner.__enter__()
+            return self._inner
+
+        def __exit__(self, exc_type, exc, tb):
+            return self._inner.__exit__(exc_type, exc, tb)
+
+    monkeypatch.setattr(parallel_mod, "ProcessPoolExecutor", CountingExecutor)
+
+    cfg = Config(
+        benchmarks=[
+            Benchmark(name="par1", cmd="echo {n}"),
+            Benchmark(name="par2", cmd="echo {n}"),
+        ],
+        grid={"n": [1, 2]},
+        limits=Limits(timeout_sec=5, warmups=0, repeats=1, shuffle=False, workers=2),
+    )
+    out = tmp_path / "runs.jsonl"
+    run_benchmarks(cfg, out, seed=0)
+    assert created == 1
+
+
 def test_run_benchmarks_parallel_handles_failure(tmp_path: Path):
     cfg = Config(
         benchmarks=[Benchmark(name="pfail", cmd="false")],
@@ -186,9 +267,11 @@ limits:
   workers: 4
   warmups: 0
   repeats: 1
+  rss_poll_interval_sec: 0.02
 """
     cfg_path = tmp_path / "bench.yaml"
     cfg_path.write_text(yaml_text)
     from tembench.config import load_config
     cfg = load_config(cfg_path)
     assert cfg.limits.workers == 4
+    assert cfg.limits.rss_poll_interval_sec == 0.02
