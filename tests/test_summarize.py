@@ -66,3 +66,36 @@ def test_summarize_keeps_all_n_points_per_impl(tmp_path: Path):
     # 3 implementations × 4 n values
     assert len(df) == 12
     assert set(df["n"].tolist()) == {1000, 2000, 4000, 8000}
+
+
+def test_summarize_derives_group_columns_from_params(tmp_path: Path):
+    p = tmp_path / "runs.jsonl"
+    records = [
+        {
+            "bench": "custom",
+            "status": "ok",
+            "wall_ms": 5.0,
+            "peak_rss_mb": 1.0,
+            "params": {"algo": "fast", "size": 10},
+        },
+        {
+            "bench": "custom",
+            "status": "ok",
+            "wall_ms": 6.0,
+            "peak_rss_mb": 1.1,
+            "params": {"algo": "fast", "size": 10},
+        },
+        {
+            "bench": "custom",
+            "status": "ok",
+            "wall_ms": 9.0,
+            "peak_rss_mb": 1.4,
+            "params": {"algo": "slow", "size": 10},
+        },
+    ]
+    _write_runs(p, records)
+
+    df = summarize_runs(p)
+    assert set(["bench", "algo", "size"]).issubset(df.columns)
+    assert len(df) == 2
+    assert sorted(df["algo"].tolist()) == ["fast", "slow"]
