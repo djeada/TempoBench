@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import math
+from typing import Sequence
 
 import pandas as pd
 import pytest
 
-from tembench.complexity import FitResult, _select_model, fit_models, predict_series
+from tembench.complexity import (
+    FitResult,
+    _select_model,
+    _slope_to_model,
+    fit_models,
+    predict_series,
+)
 
 # ---------------------------------------------------------------------------
 # Model selection tests  (deterministic, cover all canonical classes)
 # ---------------------------------------------------------------------------
 
-_SELECT_CASES = [
+_SELECT_CASES: Sequence[tuple[str, list[float], list[float], str]] = [
     # Pure complexity classes (no baseline)
     ("pure_n2_5pt", [100, 500, 1000, 5000, 10000], [n ** 2 for n in [100, 500, 1000, 5000, 10000]], "O(n²)"),
     ("pure_n_4pt", [100, 1000, 10000, 100000], [float(n) for n in [100, 1000, 10000, 100000]], "O(n)"),
@@ -91,6 +98,18 @@ def test_select_model_deterministic():
     for _, x, y, expected in _SELECT_CASES:
         for _ in range(5):
             assert _select_model(x, y) == expected
+
+
+def test_select_model_slow_monotone_growth_is_not_constant():
+    """A slow but steady rise over decades should not collapse to O(1)."""
+    x = [1000, 10000, 100000, 1000000, 10000000]
+    y = [1.0, 1.05, 1.10, 1.15, 1.20]
+    assert _select_model(x, y) == "O(log n)"
+
+
+def test_slope_to_model_maps_nlogn_boundary_correctly():
+    """Pure n*log(n) slopes around ~1.1 should map to O(n log n)."""
+    assert _slope_to_model(1.13) == "O(n log n)"
 
 
 def test_select_model_monotonic_ranking():
@@ -180,6 +199,36 @@ def test_fit_cubic_data():
     assert fits.iloc[0]["model"] == "O(n³)"
 
 
+def test_fit_models_surfaces_exponent_ci_columns():
+    df = pd.DataFrame(
+        {
+            "impl": ["a"] * 4,
+            "n": [100, 1000, 10000, 100000],
+            "y": [n * math.log(n) for n in [100, 1000, 10000, 100000]],
+        }
+    )
+    fits = fit_models(df, x_col="n", y_col="y", by=["impl"])
+    row = fits.iloc[0]
+    assert {"empirical_exponent", "exponent_ci_low", "exponent_ci_high"}.issubset(
+        fits.columns
+    )
+    assert row["exponent_ci_low"] <= row["empirical_exponent"] <= row["exponent_ci_high"]
+
+
+def test_fit_models_strict_strategy_uses_empirical_band_when_boundary_is_uncertain():
+    ns = [100, 1000, 10000, 100000]
+    df = pd.DataFrame(
+        {
+            "impl": ["a"] * len(ns),
+            "n": ns,
+            "y": [n * math.sqrt(math.log(n)) for n in ns],
+        }
+    )
+    fits = fit_models(df, x_col="n", y_col="y", by=["impl"], strategy="strict")
+    row = fits.iloc[0]
+    assert row["display_model"].startswith("O(n^")
+
+
 def test_fit_constant_data():
     """Constant data should be classified as O(1)."""
     ns = [100, 1000, 10000, 100000]
@@ -202,11 +251,12 @@ def test_predict_series():
         "n": [10, 100, 1000],
         "y": [10, 100, 1000],
     })
-    fits = fit_models(df, x_col="n", y_col="y", by=["impl"])
+    fits = fit_models(df, x_col="n", y_col="y", by=["impl"], strategy="strict")
     preds = predict_series(df, fits, x_col="n", by=["impl"])
     assert not preds.empty
     assert "yhat" in preds.columns
     assert "formula" in preds.columns
+    assert "display_model" in preds.columns
     assert len(preds) > 3
 
 

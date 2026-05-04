@@ -19,4 +19,24 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
       - run: ruff check src/ tests/
+      - run: mypy src tests
+        if: matrix.python-version == '3.12'
       - run: pytest tests/ -v
+      - name: Example smoke run
+        if: matrix.python-version == '3.12'
+        run: |
+          cat > smoke.yaml <<'YAML'
+          benchmarks:
+            - name: smoke
+              cmd: "python examples/sort_impl.py --n {n} --impl {impl}"
+          grid:
+            n: [100, 1000]
+            impl: ["random", "sorted"]
+          limits:
+            timeout_sec: 5
+            warmups: 0
+            repeats: 1
+          YAML
+          tembench run --config smoke.yaml --out-dir artifacts --quiet
+          tembench summarize --runs artifacts/runs.jsonl --out-csv artifacts/summary.csv
+          tembench plot --summary artifacts/summary.csv --out-html artifacts/runtime.html --no-fit
