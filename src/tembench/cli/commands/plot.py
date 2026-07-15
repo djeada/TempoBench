@@ -12,7 +12,7 @@ import typer
 
 from ...complexity import fit_models
 from ...plotting import plot_runtime
-from ..app import app, console
+from ..app import app, console, print_artifact, print_heading
 
 
 class ComplexityStrategy(str, Enum):
@@ -45,6 +45,14 @@ def plot(
     log_y: bool = typer.Option(False, help="Use log scale for Y axis"),
 ):
     """Create a simple runtime plot from the summary CSV."""
+    if out_html:
+        print_heading(
+            "Generating Runtime Plot",
+            summary=summary,
+            axes=f"{x} \u2192 {y}",
+            series=color,
+            complexity_fit="off" if no_fit else complexity_strategy.value,
+        )
     chart = plot_runtime(
         summary,
         x=x,
@@ -59,7 +67,7 @@ def plot(
     if out_html:
         out_html.parent.mkdir(parents=True, exist_ok=True)
         chart.save(out_html)
-        console.print(f"Wrote plot to {out_html}")
+        print_artifact("Runtime plot", out_html)
     else:
         # Print Vega-Lite JSON to stdout for piping
         json.dump(chart.to_dict(), sys.stdout)
@@ -82,5 +90,8 @@ def plot(
             by=by or [color],
             strategy=complexity_strategy.value,
         )
+        export_fits.parent.mkdir(parents=True, exist_ok=True)
         fits.to_csv(export_fits, index=False)
-        console.print(f"Wrote fits to {export_fits}")
+        console.print()
+        console.print(f"[dim]Models fitted[/dim]  {len(fits):,}")
+        print_artifact("Complexity fits", export_fits)
