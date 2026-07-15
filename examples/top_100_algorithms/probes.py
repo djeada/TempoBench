@@ -17,12 +17,17 @@ def count_python_steps(function: Callable[[int], Any], n: int) -> tuple[Any, int
     that actually ran, unlike a complexity formula supplied by the demo.
     """
     steps = 0
-    module_name = function.__module__
+    root_code = function.__code__
 
     def trace(frame: FrameType, event: str, arg: object):
         nonlocal steps
-        if event == "line" and frame.f_globals.get("__name__") == module_name:
-            steps += 1
+        if event == "line":
+            current: FrameType | None = frame
+            while current is not None:
+                if current.f_code is root_code:
+                    steps += 1
+                    break
+                current = current.f_back
         return trace
 
     previous = sys.gettrace()
@@ -34,9 +39,7 @@ def count_python_steps(function: Callable[[int], Any], n: int) -> tuple[Any, int
     return result, steps
 
 
-def median_runtime_ns(
-    function: Callable[[int], Any], n: int, repeats: int = 5, batch: int = 1
-) -> int:
+def median_runtime_ns(function: Callable[[int], Any], n: int, repeats: int = 5, batch: int = 1) -> int:
     """Return the median untraced runtime, keeping tracing out of timings."""
     samples = []
     for _ in range(repeats):
