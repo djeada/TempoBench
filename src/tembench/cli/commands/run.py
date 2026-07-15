@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 
 import typer
@@ -12,10 +14,11 @@ from rich.progress import (
     TaskProgressColumn,
     TextColumn,
 )
+from rich.table import Table
 
 from ...config import load_config
 from ...runner import expand_grid, run_benchmarks
-from ..app import app, console
+from ..app import app, console, print_artifact, print_heading
 
 
 @app.command()
@@ -45,11 +48,18 @@ def run(
         cfg.limits.workers = workers
     out_dir.mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "runs.jsonl"
+    initial_size = results_path.stat().st_size if append and results_path.exists() else 0
 
+    started = time.perf_counter()
     if not quiet:
-        console.rule("[bold blue]TempoBench - Running Benchmarks[/bold blue]")
-        console.print(f"[dim]Config:[/dim] {config}")
-        console.print(f"[dim]Output:[/dim] {out_dir}")
+        points = len(expand_grid(cfg.grid))
+        print_heading(
+            "Running Benchmarks",
+            config=config,
+            output=out_dir,
+            plan=f"{len(cfg.benchmarks)} benchmark(s) x {points} grid point(s) x {max(1, cfg.limits.repeats)} repeat(s)",
+            workers=cfg.limits.workers,
+        )
         if cfg.limits.workers > 1:
             console.print(
                 f"[dim]Workers:[/dim] {cfg.limits.workers}  [yellow]⚠ parallel mode — timings may have cross-talk[/yellow]"
@@ -87,9 +97,42 @@ def run(
         run_benchmarks(cfg, results_path, seed=seed, retries=retries, append=append)
 
     if not quiet:
+        elapsed = time.perf_counter() - started
+        statuses: dict[str, int] = {}
+        measured_ms = 0.0
+        with results_path.open() as handle:
+            handle.seek(initial_size)
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                status = str(record.get("status", "unknown"))
+                statuses[status] = statuses.get(status, 0) + 1
+                if record.get("wall_ms") is not None:
+                    measured_ms += float(record["wall_ms"])
+
         console.print()
-        console.print(f"[green]✓[/green] Wrote runs to [bold]{results_path}[/bold]")
+        summary = Table(title="Run complete", box=None)
+        summary.add_column("Successful", justify="right", style="green bold")
+        summary.add_column("Failed", justify="right", style="red bold")
+        summary.add_column("Errors", justify="right", style="red bold")
+        summary.add_column("Timed out", justify="right", style="yellow bold")
+        summary.add_column("Skipped", justify="right", style="yellow")
+        summary.add_column("Elapsed", justify="right")
+        summary.add_row(
+            str(statuses.get("ok", 0)),
+            str(statuses.get("failed", 0)),
+            str(statuses.get("error", 0)),
+            str(statuses.get("timeout", 0)),
+            str(statuses.get("skipped", 0)),
+            f"{elapsed:.2f} s",
+        )
+        console.print(summary)
+        if measured_ms:
+            console.print(f"[dim]Total measured command time: {measured_ms / 1000:.2f} s[/dim]")
         console.print()
-        console.print("[dim]Next steps:[/dim]")
-        console.print(f"  tembench summarize --runs {results_path}")
-        console.print(f"  tembench report --summary {out_dir / 'summary.csv'}")
+        print_artifact("Raw benchmark data", results_path)
+        console.print()
+        console.print("[bold]Next step[/bold]")
+        console.print(f"  tembench summarize --runs {results_path} --out-csv {out_dir / 'summary.csv'}")
