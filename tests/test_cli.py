@@ -38,12 +38,36 @@ def test_run_creates_jsonl(bench_dir: Path):
     assert (bench_dir / "runs.jsonl").exists()
 
 
+def test_run_output_clearly_summarizes_results(tmp_path: Path):
+    cfg = tmp_path / "bench.yaml"
+    cfg.write_text(textwrap.dedent("""\
+        benchmarks:
+          - name: echo_test
+            cmd: "echo {n}"
+        grid:
+          n: [1]
+        limits:
+          warmups: 0
+          repeats: 1
+    """))
+    result = runner.invoke(
+        app, ["run", "--config", str(cfg), "--out-dir", str(tmp_path / "out")]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Run complete" in result.output
+    assert "Successful" in result.output
+    assert "Raw benchmark data ready" in result.output
+    assert "Next step" in result.output
+
+
 def test_summarize(bench_dir: Path):
     runs = bench_dir / "runs.jsonl"
     csv = bench_dir / "summary.csv"
     result = runner.invoke(app, ["summarize", "--runs", str(runs), "--out-csv", str(csv)])
     assert result.exit_code == 0
     assert csv.exists()
+    assert "2 configuration(s)" in result.output
+    assert "Summary ready" in result.output
 
 
 def test_sysinfo():
