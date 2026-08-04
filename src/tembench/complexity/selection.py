@@ -64,6 +64,10 @@ def _select_model(x: Sequence[float], y: Sequence[float]) -> str:
     candidates = {
         model: score for model, score in aic_by_model.items() if math.isfinite(score)
     }
+    # Exponential bases can overfit short polynomial series. Only admit this
+    # candidate when observed growth is already beyond the polynomial range.
+    if positive_series and _log_log_slope(x, y) < 3.2:
+        candidates.pop("O(n² 2^n)", None)
     if not candidates:
         return slope_hint if positive_series else "O(n)"
 
