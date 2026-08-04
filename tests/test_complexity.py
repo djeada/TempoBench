@@ -60,7 +60,7 @@ _SELECT_CASES: Sequence[tuple[str, list[float], list[float], str]] = [
 
     # Edge cases
     ("n2_3pt_clean", [10, 100, 1000], [100.0, 10000.0, 1000000.0], "O(n²)"),
-    ("sqrt_like", [100, 1000, 10000, 100000], [10.0, 31.6, 100.0, 316.2], "O(n)"),
+    ("sqrt_like", [100, 1000, 10000, 100000], [10.0, 31.6, 100.0, 316.2], "O(√n)"),
     ("nlogn_5pt", [100, 500, 1000, 5000, 10000], [n * math.log(n) for n in [100, 500, 1000, 5000, 10000]], "O(n log n)"),
     ("n2_noisy", [100, 500, 1000, 5000], [n ** 2 * (1 + 0.05 * (-1) ** i) for i, n in enumerate([100, 500, 1000, 5000])], "O(n²)"),
     ("linear_2pt", [1000, 100000], [10.0, 1000.0], "O(n)"),
@@ -70,6 +70,8 @@ _SELECT_CASES: Sequence[tuple[str, list[float], list[float], str]] = [
     # 3-point with high dynamic range (uses OLS, not log-log)
     ("n2_3pt_high_dr", [100, 1000, 10000], [10, 1000, 100000], "O(n²)"),
     ("n3_3pt", [10, 100, 1000], [1, 1000, 1000000], "O(n³)"),
+    ("sqrt_5pt", [100, 400, 1600, 6400, 25600], [10, 20, 40, 80, 160], "O(√n)"),
+    ("held_karp_shape", [4, 5, 6, 7, 8], [n * n * 2**n for n in [4, 5, 6, 7, 8]], "O(n² 2^n)"),
     ("n_3pt", [100, 1000, 10000], [100, 1000, 10000], "O(n)"),
 
     # Outlier patterns (4+ points)

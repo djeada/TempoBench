@@ -20,56 +20,49 @@ from .probes import count_python_steps, median_runtime_ns
 SIZES = {
     "O(1)": [64, 256, 1024, 4096, 16384],
     "O(log n)": [16, 64, 256, 1024, 4096],
-    "O(n)": [100, 1000, 10000, 100000, 1000000],
-    "O(n log n)": [100, 500, 2500, 12500, 62500],
-    "O(n²)": [10, 22, 48, 105, 230],
-    "O(n³)": [5, 10, 20, 50, 100],
+    "O(√n)": [100, 400, 1600, 6400, 25600],
+    "O(n)": [100, 500, 2500, 12500],
+    "O(n log n)": [50, 250, 1250, 6250, 31250],
+    "O(n²)": [8, 16, 32, 64, 128],
+    "O(n³)": [3, 5, 8, 13, 21],
+    "O(n² 2^n)": [4, 5, 6, 7, 8],
 }
+
+TIME_SIZES = {**SIZES, "O(n³)": [5, 10, 20, 40, 80]}
 
 
 def collect(repeats: int = 5) -> pd.DataFrame:
     rows = []
     for spec in ALGORITHMS.values():
-        sizes = SIZES[spec.expected]
+        step_sizes = SIZES[spec.expected]
+        time_sizes = TIME_SIZES[spec.expected]
         started = time.perf_counter_ns()
-        spec.run(sizes[-1])
+        spec.run(time_sizes[-1])
         calibration_ns = max(1, time.perf_counter_ns() - started)
         batch = min(10_000, max(1, math.ceil(1_000_000 / calibration_ns)))
-        for n in sizes:
+        metadata = {
+            "algorithm": spec.name,
+            "category": spec.category,
+            "expected": spec.expected,
+            "assumption": spec.assumption,
+        }
+        for n in step_sizes:
             _, steps = count_python_steps(spec.run, n)
+            rows.append({**metadata, "n": n, "python_steps": steps, "runtime_ns": float("nan")})
+        for n in time_sizes:
             runtime = median_runtime_ns(spec.run, n, repeats=repeats, batch=batch)
-            rows.append(
-                {
-                    "algorithm": spec.name,
-                    "category": spec.category,
-                    "expected": spec.expected,
-                    "assumption": spec.assumption,
-                    "n": n,
-                    "python_steps": steps,
-                    "runtime_ns": runtime,
-                }
-            )
+            rows.append({**metadata, "n": n, "python_steps": float("nan"), "runtime_ns": runtime})
     return pd.DataFrame(rows)
 
 
 def add_fits(measurements: pd.DataFrame) -> pd.DataFrame:
     keys = ["algorithm"]
-    step_fits = fit_models(measurements, "n", "python_steps", keys)[
-        ["algorithm", "model"]
-    ].rename(columns={"model": "measured_steps"})
-    # Timing is pooled within algorithms that execute the same complexity
-    # kernel. This removes scheduler/CPU-frequency noise without changing the
-    # measured growth curve; raw per-algorithm samples remain in measurements.
-    pooled_time = measurements.groupby(["expected", "n"], as_index=False)[
-        "runtime_ns"
-    ].median()
-    time_fits = fit_models(pooled_time, "n", "runtime_ns", ["expected"])[
-        ["expected", "model"]
-    ].rename(columns={"model": "measured_time"})
-    report = measurements[
-        ["algorithm", "category", "expected", "assumption"]
-    ].drop_duplicates()
-    report = report.merge(step_fits, on="algorithm").merge(time_fits, on="expected")
+    step_data = measurements.dropna(subset=["python_steps"])
+    time_data = measurements.dropna(subset=["runtime_ns"])
+    step_fits = fit_models(step_data, "n", "python_steps", keys)[["algorithm", "model"]].rename(columns={"model": "measured_steps"})
+    time_fits = fit_models(time_data, "n", "runtime_ns", keys)[["algorithm", "model"]].rename(columns={"model": "measured_time"})
+    report = measurements[["algorithm", "category", "expected", "assumption"]].drop_duplicates()
+    report = report.merge(step_fits, on="algorithm").merge(time_fits, on="algorithm")
     report["steps_match"] = report["expected"] == report["measured_steps"]
     report["time_matches"] = report["expected"] == report["measured_time"]
     return report.sort_values(["category", "algorithm"])
@@ -109,6 +102,16 @@ def main() -> None:
         console.print("\n[red bold]Deterministic complexity mismatches[/red bold]")
         console.print(failures.to_string(index=False))
         sys.exit(1)
+
+    timing_mismatches = report.loc[~report["time_matches"], ["algorithm", "expected", "measured_time"]]
+    if not timing_mismatches.empty:
+        console.print("\n[yellow bold]Wall-clock classifications that differ[/yellow bold]")
+        console.print(timing_mismatches.to_string(index=False))
+        console.print(
+            "[dim]These do not invalidate deterministic complexity, but remain visible "
+            "because cache, allocation, scheduling, and interpreter effects can change "
+            "finite-range wall-clock fits.[/dim]"
+        )
 
 
 if __name__ == "__main__":

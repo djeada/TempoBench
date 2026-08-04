@@ -1,4 +1,4 @@
-"""Curated catalog and deterministic pure-Python complexity kernels.
+"""Curated catalog of genuine pure-Python algorithm demonstrations.
 
 Each entry states the input model used by its demo.  Graph bounds, for example,
 depend on both vertices and edges; sparse graph demos use E proportional to V.
@@ -9,6 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from .implementations_advanced import IMPLEMENTATIONS as ADVANCED_IMPLEMENTATIONS
+from .implementations_core import IMPLEMENTATIONS as CORE_IMPLEMENTATIONS
+from .implementations_graph import IMPLEMENTATIONS as GRAPH_IMPLEMENTATIONS
+
 
 @dataclass(frozen=True)
 class Algorithm:
@@ -18,63 +22,6 @@ class Algorithm:
     assumption: str
     run: Callable[[int], int]
 
-
-def constant(n: int) -> int:
-    values = (3, 1, 4, 1, 5)
-    return values[n % len(values)]
-
-
-def logarithmic(n: int) -> int:
-    steps = 0
-    hi = max(1, n)
-    while hi > 1:
-        hi //= 2
-        steps += hi & 1
-    return steps
-
-
-def linear(n: int) -> int:
-    total = 0
-    for value in range(n):
-        total ^= value
-    return total
-
-
-def n_log_n(n: int) -> int:
-    total = 0
-    width = 1
-    while width < n:
-        for value in range(n):
-            total ^= value + width
-        width *= 2
-    return total
-
-
-def quadratic(n: int) -> int:
-    total = 0
-    for left in range(n):
-        for right in range(n):
-            total += (left == right)
-    return total
-
-
-def cubic(n: int) -> int:
-    total = 0
-    for i in range(n):
-        for j in range(n):
-            for k in range(n):
-                total += (i + j == k)
-    return total
-
-
-_KERNELS = {
-    "O(1)": constant,
-    "O(log n)": logarithmic,
-    "O(n)": linear,
-    "O(n log n)": n_log_n,
-    "O(n²)": quadratic,
-    "O(n³)": cubic,
-}
 
 # name, category, expected complexity, benchmark input assumption
 _ENTRIES = [
@@ -95,7 +42,7 @@ _ENTRIES = [
     ("fast-exponentiation", "number-theory", "O(log n)", "exponent is n"),
     ("euclidean-gcd", "number-theory", "O(log n)", "consecutive Fibonacci-like inputs"),
     ("linear-search", "search", "O(n)", "unsuccessful lookup"),
-    ("jump-search", "search", "O(n)", "reported in supported canonical classes; actual O(sqrt(n))"),
+    ("jump-search", "search", "O(√n)", "sorted array, block size floor(sqrt(n))"),
     ("interpolation-search", "search", "O(n)", "adversarial worst case"),
     ("breadth-first-search", "graph", "O(n)", "sparse connected graph, E=Theta(V)"),
     ("depth-first-search", "graph", "O(n)", "sparse connected graph, E=Theta(V)"),
@@ -118,7 +65,12 @@ _ENTRIES = [
     ("counting-sort", "sorting", "O(n)", "key range k=Theta(n)"),
     ("radix-sort", "sorting", "O(n)", "fixed-width integer keys"),
     ("bucket-sort", "sorting", "O(n)", "uniform distribution"),
-    ("sieve-of-eratosthenes", "number-theory", "O(n)", "represented as O(n) in canonical model set; actual O(n log log n)"),
+    (
+        "sieve-of-eratosthenes",
+        "number-theory",
+        "O(n log n)",
+        "tight O(n log log n); verified against the nearest valid canonical upper bound",
+    ),
     ("prefix-function-kmp", "string", "O(n)", "pattern plus text length n"),
     ("z-algorithm", "string", "O(n)", "string length n"),
     ("manacher-palindromes", "string", "O(n)", "string length n"),
@@ -153,7 +105,7 @@ _ENTRIES = [
     ("insertion-sort", "sorting", "O(n²)", "reverse-sorted input"),
     ("cocktail-shaker-sort", "sorting", "O(n²)", "reverse-sorted input"),
     ("gnome-sort", "sorting", "O(n²)", "reverse-sorted input"),
-    ("comb-sort", "sorting", "O(n²)", "worst-case calibrated input"),
+    ("comb-sort", "sorting", "O(n log n)", "rotated demo input; general worst case remains O(n²)"),
     ("cycle-sort", "sorting", "O(n²)", "comparison count"),
     ("odd-even-sort", "sorting", "O(n²)", "reverse-sorted input"),
     ("pancake-sort", "sorting", "O(n²)", "general input"),
@@ -172,7 +124,7 @@ _ENTRIES = [
     ("floyd-warshall", "graph", "O(n³)", "n vertices, adjacency matrix"),
     ("naive-matrix-multiplication", "matrix", "O(n³)", "two dense n by n matrices"),
     ("transitive-closure-warshall", "graph", "O(n³)", "n vertices, adjacency matrix"),
-    ("held-karp-tsp", "dynamic-programming", "O(n³)", "bounded demonstration projected onto supported polynomial models"),
+    ("held-karp-tsp", "dynamic-programming", "O(n² 2^n)", "exact subset DP on n cities"),
     ("optimal-bst", "dynamic-programming", "O(n³)", "classic interval DP"),
     ("cyk-parsing", "dynamic-programming", "O(n³)", "fixed grammar, input length n"),
     ("three-sum-naive", "array", "O(n³)", "three nested scans"),
@@ -182,7 +134,17 @@ _ENTRIES = [
 
 assert len(_ENTRIES) == 100
 
+_IMPLEMENTATIONS = {
+    **CORE_IMPLEMENTATIONS,
+    **GRAPH_IMPLEMENTATIONS,
+    **ADVANCED_IMPLEMENTATIONS,
+}
+_NAMES = {name for name, _, _, _ in _ENTRIES}
+if set(_IMPLEMENTATIONS) != _NAMES:
+    missing = sorted(_NAMES - set(_IMPLEMENTATIONS))
+    extra = sorted(set(_IMPLEMENTATIONS) - _NAMES)
+    raise RuntimeError(f"implementation registry mismatch: missing={missing}, extra={extra}")
+
 ALGORITHMS = {
-    name: Algorithm(name, category, expected, assumption, _KERNELS[expected])
-    for name, category, expected, assumption in _ENTRIES
+    name: Algorithm(name, category, expected, assumption, _IMPLEMENTATIONS[name]) for name, category, expected, assumption in _ENTRIES
 }

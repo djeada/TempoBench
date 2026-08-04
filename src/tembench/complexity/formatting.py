@@ -9,10 +9,12 @@ from .models import _BASIS_STR
 _MODEL_SLOPE_INTERVALS = {
     "O(1)": (-math.inf, 0.08),
     "O(log n)": (0.08, 0.45),
+    "O(√n)": (0.3, 0.75),
     "O(n)": (0.45, 1.05),
     "O(n log n)": (1.05, 1.55),
     "O(n²)": (1.55, 2.4),
     "O(n³)": (2.4, math.inf),
+    "O(n² 2^n)": (2.4, math.inf),
 }
 
 
