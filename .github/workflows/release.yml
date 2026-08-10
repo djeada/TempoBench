@@ -77,6 +77,11 @@ jobs:
               encoding="utf-8",
           )
 
+      # The binary is built as `tembench.bin` and renamed when packaged.
+      # --include-package-data lays the package's data files out under
+      # `tembench/`, which cannot coexist with an executable also called
+      # `tembench` on POSIX. Windows is unaffected: there the executable is
+      # `tembench.exe`, a different name from the data directory.
       - name: Build onefile executable (Linux/macOS)
         if: runner.os != 'Windows'
         run: >
@@ -84,7 +89,7 @@ jobs:
           --onefile
           --assume-yes-for-downloads
           --output-dir=dist
-          --output-filename=tembench
+          --output-filename=tembench.bin
           --include-package=tembench
           --include-package-data=tembench
           --include-package-data=altair
@@ -117,7 +122,7 @@ jobs:
           exe = (
               Path("dist/tembench.dist/tembench.exe")
               if runner_os == "Windows"
-              else Path("dist/tembench")
+              else Path("dist/tembench.bin")
           )
           if not exe.is_file():
               print(f"No executable at {exe}")
@@ -199,8 +204,8 @@ jobs:
 
           expected = {
               "Windows": "dist/tembench.exe",
-              "Linux": "dist/tembench",
-              "macOS": "dist/tembench",
+              "Linux": "dist/tembench.bin",
+              "macOS": "dist/tembench.bin",
           }[runner_os]
 
           src_candidates = [expected] if os.path.isfile(expected) else []
@@ -250,4 +255,7 @@ jobs:
           name: Release ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # Created as a draft: the binaries are attached and reviewable, but
+          # nothing is public until someone presses Publish.
+          draft: true
           files: release/tembench-*
