@@ -10,9 +10,9 @@ Public surface (preserved from the legacy single-file implementation):
 
 from __future__ import annotations
 
+from ..system import get_system_info
 from .comparison import compare_summaries, generate_comparison_report
 from .report import generate_report
-from .system import get_system_info
 
 __all__ = [
     "compare_summaries",

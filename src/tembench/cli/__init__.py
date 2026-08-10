@@ -19,6 +19,7 @@ from .commands import (  # noqa: F401  (import-for-side-effects)
     run,
     summarize,
     sysinfo,
+    validate,
 )
 
 __all__ = ["app", "console"]

@@ -6,6 +6,11 @@ import altair as alt
 import pandas as pd
 
 from ..complexity import fit_models, predict_series
+from ..summarize import (
+    TIME_COLUMN_PREFERENCE,
+    count_column_for,
+    spread_columns_for,
+)
 from ._common import (
     PALETTE,
     axis_scale,
@@ -22,8 +27,8 @@ from ._common import (
 def plot_runtime(
     summary_csv: Path,
     x: str = "n",
-    y: str = "wall_ms_median",
-    color: str = "impl",
+    y: str = "time_ms_median",
+    color: str | None = "impl",
     bench: str | None = None,
     show_fit: bool = True,
     by: list[str] | None = None,
@@ -42,7 +47,7 @@ def plot_runtime(
             raise ValueError(f"No rows found for bench='{bench}'.")
 
     has_multi_bench = "bench" in df.columns and df["bench"].nunique(dropna=False) > 1
-    y_col = resolve_y(df, y, ["wall_ms_median", "wall_ms_mean"])
+    y_col = resolve_y(df, y, list(TIME_COLUMN_PREFERENCE))
 
     x_scale = axis_scale(log_x)
     y_scale = axis_scale(log_y)
@@ -83,7 +88,9 @@ def plot_runtime(
         ]
     )
     tooltips.append(
-        alt.Tooltip(color, title=label(color)) if color_enabled else alt.Tooltip(y_col)
+        alt.Tooltip(color, title=label(color))
+        if color_enabled and color is not None
+        else alt.Tooltip(y_col)
     )
     if "bench" in df.columns:
         tooltips.insert(0, alt.Tooltip("bench", title="Benchmark"))
@@ -145,13 +152,19 @@ def plot_runtime(
             ).resolve_scale(y="independent")
         return chart
 
-    by_cols = by or [c for c in ["bench", color] if c in df.columns]
-    if not by_cols:
-        by_cols = [c for c in [color] if c in df.columns]
+    by_cols = by or [c for c in ["bench", color] if c is not None and c in df.columns]
     if not by_cols or df.empty or x not in df.columns or y_col not in df.columns:
         return base + voronoi + rule + highlight_dots
 
-    fits = fit_models(df, x_col=x, y_col=y_col, by=by_cols, strategy=complexity_strategy)
+    fits = fit_models(
+        df,
+        x_col=x,
+        y_col=y_col,
+        by=by_cols,
+        strategy=complexity_strategy,
+        count_col=count_column_for(y_col),
+        spread_cols=spread_columns_for(y_col),
+    )
     if fits.empty:
         return base + voronoi + rule + highlight_dots
     preds = predict_series(df, fits, x_col=x, by=by_cols)
@@ -174,6 +187,15 @@ def plot_runtime(
                     ("empirical_exponent", "Exponent", ".2f"),
                     ("exponent_ci_low", "Exp CI Low", ".2f"),
                     ("exponent_ci_high", "Exp CI High", ".2f"),
+                ]
+            )
+        )
+    if "confidence" in preds.columns:
+        fit_tooltips.extend(
+            build_tooltips(
+                [
+                    ("confidence", "Confidence", None),
+                    ("confidence_notes", "Caveats", None),
                 ]
             )
         )
@@ -207,6 +229,9 @@ def plot_runtime(
         row = group_df.iloc[idx].copy()
         impl_name = row.get(color, "") if color in preds.columns else ""
         display_model = row.get("display_model", row["model"])
+        # A class the data cannot support must not read like one it can.
+        if row.get("confidence") == "low":
+            display_model = f"{display_model} (low confidence)"
         row["_label"] = f"{impl_name}: {display_model}" if impl_name else display_model
         label_rows.append(row)
     label_points = pd.DataFrame(label_rows).reset_index(drop=True)
@@ -242,7 +267,7 @@ def plot_runtime(
         ).resolve_scale(y="independent")
 
     fit_info_parts = []
-    if color in fits.columns:
+    if color is not None and color in fits.columns:
         for _, row in fits.iterrows():
             fit_info_parts.append(f"{row[color]}: {row['formula']}")
     else:

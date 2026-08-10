@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parents[1] / "examples"))
 
 import pandas as pd  # noqa: E402
@@ -92,3 +94,55 @@ def test_deterministic_step_curves_match_all_expected_classes():
             )
     report = add_fits(pd.DataFrame(rows))
     assert report["steps_match"].all(), report.loc[~report["steps_match"]]
+
+
+def _stack_walking_step_count(function, n):
+    """The original tracer, kept as an oracle for the optimised one.
+
+    It decides ancestry per line event by walking the frame stack, which is
+    obviously correct and obviously slow.
+    """
+    steps = 0
+    root_code = function.__code__
+
+    def trace(frame, event, arg):
+        nonlocal steps
+        if event == "line":
+            current = frame
+            while current is not None:
+                if current.f_code is root_code:
+                    steps += 1
+                    break
+                current = current.f_back
+        return trace
+
+    previous = sys.gettrace()
+    try:
+        sys.settrace(trace)
+        result = function(n)
+    finally:
+        sys.settrace(previous)
+    return result, steps
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "binary-search",          # shallow, iterative
+        "merge-sort",             # deeply recursive
+        "quick-sort",             # recursive with helpers
+        "depth-first-search",     # recursion over a graph
+        "held-karp-tsp",          # heavy nested loops
+        "huffman-coding",         # builds and walks a tree
+        "fibonacci-search",       # calls out to helpers
+        "topological-sort",       # generators / iterators
+    ],
+)
+def test_optimised_step_counter_matches_the_stack_walking_oracle(name):
+    """Counting frames by call-time ancestry must equal walking the stack."""
+    spec = ALGORITHMS[name]
+    # Equivalence is a property of the tracer, not of the growth curve, so the
+    # two smallest sizes exercise it just as well as the full sweep would.
+    for n in SIZES[spec.expected][:2]:
+        expected = _stack_walking_step_count(spec.run, n)
+        assert count_python_steps(spec.run, n) == expected, f"{name} at n={n}"

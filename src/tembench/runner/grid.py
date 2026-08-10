@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 from itertools import product
 from pathlib import Path
 
 from ..config import Benchmark
+from ..placeholders import builtin_placeholders
 from .process import run_once
+from .reported import MARKER_NAME
 from .result import TrialResult
 
 
@@ -21,7 +24,24 @@ def expand_grid(grid: dict[str, list]) -> list[dict[str, object]]:
 
 
 def format_cmd(template: str, params: dict[str, object]) -> str:
-    return template.format(**params)
+    """Expand a command template from the grid point plus built-in placeholders.
+
+    Grid keys take precedence, so a sweep may shadow a built-in.
+    """
+    return template.format(**{**builtin_placeholders(), **params})
+
+
+def _require_reported(rec: TrialResult) -> TrialResult:
+    """Fail an otherwise-successful trial that did not self-report its duration."""
+    if rec.status != "ok" or rec.reported_ms is not None:
+        return rec
+    note = (
+        f"limits.metric is 'reported' but the command printed no {MARKER_NAME} marker "
+        f"on stdout. Print a line like '{MARKER_NAME}: 12.345' from the command, or "
+        "set limits.metric to 'auto' or 'wall'."
+    )
+    stderr = f"{rec.stderr}\n{note}" if rec.stderr else note
+    return dataclasses.replace(rec, status="failed", stderr=stderr)
 
 
 def _run_grid_point(
@@ -32,6 +52,7 @@ def _run_grid_point(
     repeats: int,
     retries: int,
     poll_interval_sec: float = 0.01,
+    metric: str = "auto",
 ) -> list[TrialResult]:
     """Execute warmups + repeats for a single (bench, params) combination.
 
@@ -58,6 +79,8 @@ def _run_grid_point(
             timeout,
             poll_interval_sec=poll_interval_sec,
         ).with_context(bench=bench.name, cmd=cmd, params=params)
+        if metric == "reported":
+            rec = _require_reported(rec)
         results.append(rec)
         if rec["status"] == "ok":
             done += 1

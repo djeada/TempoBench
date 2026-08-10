@@ -9,6 +9,7 @@ import typer
 from rich.panel import Panel
 
 from ...reporting import compare_summaries, generate_comparison_report
+from ...reporting.comparison import comparison_tally
 from ..app import app, console
 
 
@@ -49,11 +50,13 @@ def compare(
         )
         raise typer.Exit(1)
 
-    # Check for regressions
-    regression_cols = [c for c in comparison_df.columns if c.endswith("_regression")]
-    total_regressions = 0
-    for col in regression_cols:
-        total_regressions += comparison_df[col].sum()
+    tally = comparison_tally(comparison_df, threshold)
+    total_regressions = tally["regressions"]
+    console.print(
+        f"[dim]Compared[/dim] {tally['compared']} configuration(s)  "
+        f"[dim]Improved[/dim] {tally['improvements']}  "
+        f"[dim]Regressed[/dim] {total_regressions}"
+    )
 
     generate_comparison_report(
         comparison_df=comparison_df,

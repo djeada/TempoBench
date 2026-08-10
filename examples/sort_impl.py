@@ -1,5 +1,6 @@
 import argparse
 import random
+import time
 
 
 def make_data(n: int, impl: str):
@@ -18,9 +19,15 @@ def main():
     p.add_argument("--impl", type=str, required=True)
     args = p.parse_args()
     data = make_data(args.n, args.impl)
+
+    started = time.perf_counter()
     data.sort()
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+
     # print small digest to avoid optimization removal
     print(data[0], data[-1])
+    # TempoBench reads this marker and measures the sort rather than the process.
+    print(f"TEMPOBENCH_MS: {elapsed_ms:.6f}")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from typing import Optional
 import typer
 
 from ...plotting import create_dashboard
-from ..app import app, console
+from ..app import app, console, load_summary, print_axes, resolve_axes
 
 
 @app.command()
@@ -22,8 +22,10 @@ def dashboard(
     runs: Optional[Path] = typer.Option(
         None, help="Path to raw JSONL runs (optional, for boxplots)"
     ),
-    x: str = typer.Option("n", help="X axis parameter"),
-    color: str = typer.Option("impl", help="Series grouping column"),
+    x: Optional[str] = typer.Option(None, help="X axis parameter (default: inferred)"),
+    color: Optional[str] = typer.Option(
+        None, help="Series grouping column (default: inferred)"
+    ),
     output: Path = typer.Option(
         Path("artifacts/dashboard.html"), help="Output path for dashboard"
     ),
@@ -36,7 +38,11 @@ def dashboard(
     [bold]Example:[/bold]
         tembench dashboard --summary artifacts/summary.csv --output artifacts/dashboard.html
     """
+    df = load_summary(summary)
+    explicit_axes = x is not None and color is not None
+    x, color = resolve_axes(df, x, color)
     console.print("[bold blue]Generating TempoBench Dashboard...[/bold blue]")
+    print_axes(x, color, explicit_axes)
 
     if runs is None:
         default_runs = summary.parent / "runs.jsonl"
