@@ -5,6 +5,7 @@ from pathlib import Path
 import altair as alt
 import pandas as pd
 
+from ..summarize import TIME_COLUMN_PREFERENCE
 from ._common import (
     PALETTE,
     axis_scale,
@@ -21,7 +22,7 @@ def plot_memory(
     summary_csv: Path,
     x: str = "n",
     y: str = "peak_rss_mb_median",
-    color: str = "impl",
+    color: str | None = "impl",
     log_x: bool = False,
     log_y: bool = False,
 ) -> alt.Chart:
@@ -71,8 +72,8 @@ def plot_memory(
 def plot_heatmap(
     summary_csv: Path,
     x: str = "n",
-    y: str = "impl",
-    value: str = "wall_ms_median",
+    y: str | None = "impl",
+    value: str = "time_ms_median",
 ) -> alt.Chart:
     """Create a performance heatmap."""
     df = pd.read_csv(summary_csv)
@@ -84,7 +85,7 @@ def plot_heatmap(
             .encode(text=alt.value("Insufficient data for heatmap"))
         )
 
-    value_col = resolve_y(df, value, ["wall_ms_median", "wall_ms_mean"])
+    value_col = resolve_y(df, value, list(TIME_COLUMN_PREFERENCE))
 
     rect = (
         alt.Chart(df)
@@ -103,7 +104,7 @@ def plot_heatmap(
             tooltip=build_tooltips(
                 [
                     (x, label(x), None),
-                    (y, label(y), None),
+                    (str(y), label(y), None),
                     (value_col, label(value_col), ".1f"),
                 ]
             ),

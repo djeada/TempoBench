@@ -168,3 +168,34 @@ def test_plot_runtime_strict_strategy_uses_display_model_field(tmp_path: Path):
     chart = plot_runtime(summary, bench="a", complexity_strategy="strict")
     spec = chart.to_dict()
     assert "display_model" in json.dumps(spec)
+
+
+def test_boxplot_uses_self_reported_durations_when_every_trial_has_one(tmp_path: Path):
+    """The dashboard must show the spread of the numbers that were fitted."""
+    from tembench.plotting.distribution import plot_boxplot
+
+    runs = tmp_path / "runs.jsonl"
+    runs.write_text("".join(
+        json.dumps({
+            "ts": "t", "status": "ok", "wall_ms": 90.0 + i,
+            "reported_ms": 1.0 + i, "params": {"impl": "a", "n": 1},
+        }) + "\n"
+        for i in range(3)
+    ))
+    spec = plot_boxplot(runs).to_dict()
+    assert spec["encoding"]["y"]["field"] == "reported_ms"
+
+
+def test_boxplot_falls_back_to_wall_time_without_markers(tmp_path: Path):
+    from tembench.plotting.distribution import plot_boxplot
+
+    runs = tmp_path / "runs.jsonl"
+    runs.write_text("".join(
+        json.dumps({
+            "ts": "t", "status": "ok", "wall_ms": 90.0 + i,
+            "params": {"impl": "a", "n": 1},
+        }) + "\n"
+        for i in range(3)
+    ))
+    spec = plot_boxplot(runs).to_dict()
+    assert spec["encoding"]["y"]["field"] == "wall_ms"

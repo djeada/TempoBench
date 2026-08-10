@@ -1,16 +1,31 @@
 benchmarks:
   - name: py_unique_count
-    cmd: "python examples/unique_impl.py --n {n} --impl {impl} --seed 42"
+    # {python} expands to the interpreter TempoBench runs under, so this config
+    # works on machines where `python` is not a command.
+    cmd: "{python} examples/unique_impl.py --n {n} --impl {impl} --seed 42"
     workdir: "."
     env: {}
 
 grid:
-  n: [10000, 50000, 100000, 500000, 1000000, 5000000]
+  # Five sizes spanning 100x: enough to separate neighbouring complexity
+  # classes, and small enough that the whole sweep finishes in a couple of
+  # minutes even though `quadratic` hits the timeout wall near the top.
+  n: [10000, 50000, 100000, 500000, 1000000]
   impl: ["quadratic", "sort_scan", "hash_set"]
 
 limits:
-  timeout_sec: 30
-  warmups: 0
-  repeats: 2
+  timeout_sec: 10
+  # One warm-up per grid point discards the first, cold measurement: allocator
+  # and cache state on a first touch can make small inputs look disproportionately
+  # slow, which bends the curve upward and inflates the fitted class.
+  warmups: 1
+  # A median needs enough samples to be one.  With two, the "median" is just the
+  # mean of both, and outlier filtering has nothing to work with.
+  repeats: 5
+  prune_on_timeout: true
+  # unique_impl.py prints a TEMPOBENCH_MS marker, so the interpreter startup and
+  # input generation are excluded from the measured duration.  Without this the
+  # ~80 ms of startup dominates the fast implementations and flattens their curves.
+  metric: reported
 
 pin_cpu: 0

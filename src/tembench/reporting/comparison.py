@@ -7,9 +7,22 @@ from typing import Optional
 
 import pandas as pd
 
+from .. import PROJECT_URL
+from ..summarize import TIME_COLUMN_PREFERENCE, grid_columns
+from ..system import get_system_info
 from .formatting import _col_label, _stat_card
 from .resources import render_head_assets, render_theme_toggle
-from .system import get_system_info
+
+
+def _key_columns(current: pd.DataFrame, baseline: pd.DataFrame) -> list[str]:
+    """Infer the columns that identify a grid point in both summaries.
+
+    Assuming fixed names would join unrelated rows into a cartesian product for
+    any sweep named differently, and silently report the resulting nonsense as
+    regressions.
+    """
+    shared = [c for c in current.columns if c in baseline.columns]
+    return grid_columns(shared)
 
 
 def compare_summaries(
@@ -21,13 +34,7 @@ def compare_summaries(
     current = pd.read_csv(current_csv)
     baseline = pd.read_csv(baseline_csv)
 
-    group_cols = [
-        c
-        for c in ["bench", "impl", "n"]
-        if c in current.columns and c in baseline.columns
-    ]
-    if not group_cols:
-        group_cols = ["bench"] if "bench" in current.columns else []
+    group_cols = _key_columns(current, baseline)
     if not group_cols:
         return pd.DataFrame()
 
@@ -36,25 +43,27 @@ def compare_summaries(
     )
     result_cols = list(group_cols)
 
-    for metric in ["wall_ms_median", "wall_ms_mean"]:
+    # Only one duration decides pass/fail.  A summary can carry both a
+    # self-reported and a wall-clock family, and wall clock includes process
+    # startup — letting it raise regressions too would both double-count and
+    # turn ordinary startup jitter into failures.
+    comparable = [
+        m
+        for m in TIME_COLUMN_PREFERENCE
+        if f"{m}_current" in merged.columns and f"{m}_baseline" in merged.columns
+    ]
+    decisive = comparable[0] if comparable else None
+
+    for metric in comparable:
         curr_col, base_col = f"{metric}_current", f"{metric}_baseline"
-        if curr_col in merged.columns and base_col in merged.columns:
-            merged[f"{metric}_delta"] = merged[curr_col] - merged[base_col]
-            merged[f"{metric}_delta_pct"] = (
-                (merged[curr_col] - merged[base_col]) / merged[base_col] * 100
-            ).round(2)
-            merged[f"{metric}_regression"] = (
-                merged[f"{metric}_delta_pct"] > threshold_pct
-            )
-            result_cols.extend(
-                [
-                    curr_col,
-                    base_col,
-                    f"{metric}_delta",
-                    f"{metric}_delta_pct",
-                    f"{metric}_regression",
-                ]
-            )
+        merged[f"{metric}_delta"] = merged[curr_col] - merged[base_col]
+        merged[f"{metric}_delta_pct"] = (
+            (merged[curr_col] - merged[base_col]) / merged[base_col] * 100
+        ).round(2)
+        result_cols.extend([curr_col, base_col, f"{metric}_delta", f"{metric}_delta_pct"])
+        if metric == decisive:
+            merged[f"{metric}_regression"] = merged[f"{metric}_delta_pct"] > threshold_pct
+            result_cols.append(f"{metric}_regression")
 
     for metric in ["peak_rss_mb_median", "peak_rss_mb_mean"]:
         curr_col, base_col = f"{metric}_current", f"{metric}_baseline"
@@ -71,6 +80,28 @@ def compare_summaries(
     return merged[result_cols]
 
 
+def comparison_tally(comparison_df: pd.DataFrame, threshold_pct: float) -> dict[str, int]:
+    """Count compared configurations, regressions, and improvements.
+
+    Everything is counted on the single decisive metric.  Summing over every
+    `_delta_pct` column would tally one faster configuration once per metric it
+    happens to carry, letting a run report more wins than it compared.
+    """
+    regression_cols = [c for c in comparison_df.columns if c.endswith("_regression")]
+    decisive_delta = next(
+        (c.replace("_regression", "_delta_pct") for c in regression_cols), None
+    )
+    improvements = 0
+    if decisive_delta and decisive_delta in comparison_df.columns:
+        improvements = int((comparison_df[decisive_delta] < -threshold_pct).sum())
+
+    return {
+        "compared": len(comparison_df),
+        "regressions": int(sum(comparison_df[c].sum() for c in regression_cols)),
+        "improvements": improvements,
+    }
+
+
 def generate_comparison_report(
     comparison_df: pd.DataFrame,
     title: str = "TempoBench Comparison Report",
@@ -80,14 +111,10 @@ def generate_comparison_report(
     """Generate an HTML comparison report."""
     sysinfo = get_system_info()
 
-    regression_cols = [c for c in comparison_df.columns if c.endswith("_regression")]
-    total_regressions = sum(comparison_df[col].sum() for col in regression_cols)
-    total_configs = len(comparison_df)
-
-    delta_pct_cols = [c for c in comparison_df.columns if c.endswith("_delta_pct")]
-    improvements = sum(
-        (comparison_df[col] < -threshold_pct).sum() for col in delta_pct_cols
-    )
+    tally = comparison_tally(comparison_df, threshold_pct)
+    total_regressions = tally["regressions"]
+    total_configs = tally["compared"]
+    improvements = tally["improvements"]
 
     tbl = ['<div class="table-wrap"><table class="data-table">']
     tbl.append("<thead><tr>")
@@ -169,7 +196,7 @@ def generate_comparison_report(
     </div>
 
     <div class="report-footer">
-      <p>Generated by <a href="https://github.com/tempobench/tempobench">TempoBench</a> · {sysinfo['timestamp']}</p>
+      <p>Generated by <a href="{PROJECT_URL}">TempoBench</a> · {sysinfo['timestamp']}</p>
     </div>
 
   </div>

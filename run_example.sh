@@ -42,7 +42,8 @@ mkdir -p "${OUT_DIR}"
 
 tembench run --config "${CONFIG_FILE}" --out-dir "${OUT_DIR}"
 tembench summarize --runs "${OUT_DIR}/runs.jsonl" --out-csv "${OUT_DIR}/summary.csv"
-tembench plot --summary "${OUT_DIR}/summary.csv" --out-html "${OUT_DIR}/runtime.html"
+tembench plot --summary "${OUT_DIR}/summary.csv" --out-html "${OUT_DIR}/runtime.html" \
+  --export-fits "${OUT_DIR}/fits.csv"
 tembench report --summary "${OUT_DIR}/summary.csv" --output "${OUT_DIR}/report.html"
 
 cat <<EOF

@@ -6,6 +6,10 @@ import math
 
 from .models import _BASIS_STR
 
+# Exponent band each class is allowed to occupy before `strict` mode reports an
+# empirical exponent instead.  These overlap where the classes themselves are
+# hard to separate over a finite range, so unlike `fitting._slope_to_model` they
+# do not have to partition the line.
 _MODEL_SLOPE_INTERVALS = {
     "O(1)": (-math.inf, 0.08),
     "O(log n)": (0.08, 0.45),

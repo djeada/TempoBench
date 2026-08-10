@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -28,6 +28,17 @@ def _should_prune_key(timed_out_keys: set[object], key_val: object) -> bool:
     return False
 
 
+def _series_key(params: Mapping[str, object], growth_key: str) -> tuple:
+    """Identify the sweep a grid point belongs to, ignoring the input size.
+
+    Timing out says something about one implementation at one size, not about
+    every implementation at that size.  Pruning is therefore scoped to the other
+    grid axes, so a slow quadratic implementation cannot truncate the sweep of a
+    fast one and starve its complexity fit of data points.
+    """
+    return tuple(sorted((k, repr(v)) for k, v in params.items() if k != growth_key))
+
+
 def _run_serial(
     cfg: Config,
     out_path: Path,
@@ -43,10 +54,12 @@ def _run_serial(
     with out_path.open(mode) as f:
         for bench in cfg.benchmarks:
             build_once(bench)
-            timed_out_keys: set = set()
+            timed_out_by_series: dict[tuple, set] = {}
             for params in points:
                 gk = cfg.limits.growth_key
                 key_val = params.get(gk) if gk else None
+                series = _series_key(params, gk) if gk else ()
+                timed_out_keys = timed_out_by_series.setdefault(series, set())
                 if (
                     cfg.limits.prune_on_timeout
                     and gk
@@ -75,6 +88,7 @@ def _run_serial(
                     cfg.limits.repeats,
                     retries,
                     poll_interval_sec,
+                    cfg.limits.metric,
                 )
                 for i, rec in enumerate(results):
                     f.write(json.dumps(rec.to_dict()) + "\n")

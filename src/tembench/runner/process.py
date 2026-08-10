@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import subprocess
 import tempfile
 import time
@@ -13,8 +12,10 @@ from typing import Any
 
 import psutil
 
+from ..command import split_command
 from ..config import Benchmark
 from .process_group import popen_process_group_kwargs, terminate_process_group
+from .reported import parse_reported_ms
 from .result import TrialResult, TrialStatus
 
 
@@ -44,25 +45,39 @@ def run_once(
                     "text": True,
                 }
                 popen_kwargs.update(popen_process_group_kwargs())
-                with subprocess.Popen(shlex.split(cmd), **popen_kwargs) as proc:
-                    p = psutil.Process(proc.pid)
-                    while True:
-                        if timeout is not None and (time.perf_counter() - start) > timeout:
-                            status = "timeout"
-                            terminate_process_group(proc)
-                            break
-                        try:
-                            procs = [p] + p.children(recursive=True)
-                            rss = sum(
-                                ch.memory_info().rss for ch in procs if ch.is_running()
-                            )
-                            peak_rss = max(peak_rss, rss)
-                        except psutil.Error:
-                            pass
-                        if proc.poll() is not None:
-                            break
-                        time.sleep(sleep_interval)
-                    rc = proc.wait()
+                with subprocess.Popen(split_command(cmd), **popen_kwargs) as proc:
+                    try:
+                        p = psutil.Process(proc.pid)
+                        while True:
+                            if (
+                                timeout is not None
+                                and (time.perf_counter() - start) > timeout
+                            ):
+                                status = "timeout"
+                                terminate_process_group(proc)
+                                break
+                            try:
+                                procs = [p] + p.children(recursive=True)
+                                rss = sum(
+                                    ch.memory_info().rss
+                                    for ch in procs
+                                    if ch.is_running()
+                                )
+                                peak_rss = max(peak_rss, rss)
+                            except psutil.Error:
+                                pass
+                            if proc.poll() is not None:
+                                break
+                            time.sleep(sleep_interval)
+                        rc = proc.wait()
+                    except BaseException:
+                        # Ctrl-C, or the runner being killed mid-sweep.  The child
+                        # runs in its own process group so signals do not reach it,
+                        # and `Popen.__exit__` only *waits* — without this, aborting
+                        # a sweep would hang on the current trial and, if the parent
+                        # died anyway, leave a heavy benchmark orphaned.
+                        terminate_process_group(proc)
+                        raise
 
                 out_handle.flush()
                 err_handle.flush()
@@ -74,11 +89,13 @@ def run_once(
         if rc not in (0, None) and status == "ok":
             status = "failed"
         wall_ms = (time.perf_counter() - start) * 1000.0
+        reported_ms = parse_reported_ms(stdout_data) if status == "ok" else None
         return TrialResult(
             ts=ts,
             status=status,
             rc=rc,
             wall_ms=round(wall_ms, 3),
+            reported_ms=None if reported_ms is None else round(reported_ms, 6),
             peak_rss_mb=round(peak_rss / (1024**2), 3),
             stdout=stdout_data,
             stderr=stderr_data,
