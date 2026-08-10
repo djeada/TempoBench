@@ -1,7 +1,7 @@
 """Big-O complexity fitting and selection.
 
 Public API:
-    FitResult, fit_models, predict_series
+    FitResult, fit_models, predict_series, FitQuality, assess_fit
 
 Internals exposed for tests / advanced use:
     _select_model, _basis_functions, _ols_fit, _log_log_slope,
@@ -21,12 +21,15 @@ from .fitting import (
 )
 from .formatting import _format_coeff, _format_formula
 from .models import _ALL_MODELS, _BASIS_STR, _MODEL_ORDER, _basis_functions
+from .quality import FitQuality, assess_fit
 from .selection import _select_model
 
 __all__ = [
     "FitResult",
     "fit_models",
     "predict_series",
+    "FitQuality",
+    "assess_fit",
     # internals (kept for back-compat with existing imports / tests)
     "_select_model",
     "_basis_functions",

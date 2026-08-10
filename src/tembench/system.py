@@ -1,4 +1,9 @@
-"""System information collection for reproducibility."""
+"""System information collection for reproducibility.
+
+Lives above both `runner` and `reporting`: the runner records it at benchmark
+time so a report can state the machine the numbers came from, rather than the
+machine that happened to render the report.
+"""
 
 from __future__ import annotations
 

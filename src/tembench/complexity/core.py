@@ -10,7 +10,8 @@ import pandas as pd
 from .fitting import _bootstrap_exponent_ci, _ols_fit, _upper_bound_offset
 from .formatting import _format_formula, _format_model_label
 from .models import _MODEL_ORDER, _basis_functions
-from .selection import _select_model
+from .quality import assess_fit
+from .selection import _rank_models, runner_up
 
 
 @dataclass
@@ -46,6 +47,8 @@ def fit_models(
     y_col: str,
     by: List[str],
     strategy: str = "heuristic",
+    count_col: str | None = None,
+    spread_cols: tuple[str, str] | None = None,
 ) -> pd.DataFrame:
     """Fit Big-O complexity models per group.
 
@@ -58,7 +61,11 @@ def fit_models(
     4. Shift the curve up by `offset` to form a proper upper bound.
 
     Returns DataFrame: by…, model, display_model, C, baseline, offset, formula,
-    rss, nobs, empirical_exponent, exponent_ci_low, exponent_ci_high
+    rss, nobs, empirical_exponent, exponent_ci_low, exponent_ci_high,
+    runner_up, model_margin, confidence, confidence_notes
+
+    A class is always returned; `confidence` says whether the measurements could
+    support it.  See `tembench.complexity.quality`.
     """
     if strategy not in {"heuristic", "strict"}:
         raise ValueError("strategy must be one of: heuristic, strict")
@@ -73,8 +80,25 @@ def fit_models(
         if len(x) < 2:
             continue
 
+        # How many trials the thinnest point in this series was built from.
+        min_samples = None
+        if count_col and count_col in group.columns:
+            counts = pd.to_numeric(group[count_col], errors="coerce").dropna()
+            if not counts.empty:
+                min_samples = float(counts.min())
+
+        # The least repeatable point in the series, as a fraction of its median.
+        max_relative_spread = None
+        if spread_cols and all(c in group.columns for c in spread_cols):
+            low = pd.to_numeric(group[spread_cols[0]], errors="coerce")
+            high = pd.to_numeric(group[spread_cols[1]], errors="coerce")
+            centre = pd.to_numeric(group[y_col], errors="coerce")
+            relative = ((high - low) / centre.where(centre > 0)).dropna()
+            if not relative.empty:
+                max_relative_spread = float(relative.max())
+
         # Step 1: Select model based on growth pattern
-        model = _select_model(x, y)
+        model, scores = _rank_models(x, y)
 
         # Step 2: Fit OLS for the selected model
         C, baseline, rss = _ols_fit(x, y, bases[model])
@@ -91,6 +115,10 @@ def fit_models(
                 C = 0.0
                 baseline = max(y)
                 rss = sum((yi - baseline) ** 2 for yi in y)
+
+        # Resolved after the negative-coefficient fallback, so the margin always
+        # describes the class that is actually being reported.
+        rival, margin = runner_up(model, scores)
 
         # Step 3: Compute upper-bound offset
         offset = _upper_bound_offset(x, y, bases[model], C, baseline)
@@ -113,6 +141,16 @@ def fit_models(
             rec[by[0]] = keys
 
         eff_baseline = baseline + offset
+        quality = assess_fit(
+            x,
+            y,
+            effective_baseline=eff_baseline,
+            exponent_ci_low=exponent_ci_low,
+            exponent_ci_high=exponent_ci_high,
+            model_margin=margin,
+            min_samples=min_samples,
+            max_relative_spread=max_relative_spread,
+        )
         rec.update(
             {
                 "model": model,
@@ -126,6 +164,10 @@ def fit_models(
                 "empirical_exponent": empirical_exponent,
                 "exponent_ci_low": exponent_ci_low,
                 "exponent_ci_high": exponent_ci_high,
+                "runner_up": rival,
+                "model_margin": margin,
+                "confidence": quality.confidence,
+                "confidence_notes": quality.summary,
             }
         )
         results.append(rec)
@@ -175,7 +217,7 @@ def predict_series(
 
     pred_parts = []
     for model, part in pred_df.groupby("model", dropna=False):
-        fn = bases[model]
+        fn = bases[str(model)]
         out = part.copy()
         x_vals = out[x_col].astype(float).map(fn)
         out["yhat"] = (
@@ -195,6 +237,8 @@ def predict_series(
         "empirical_exponent",
         "exponent_ci_low",
         "exponent_ci_high",
+        "confidence",
+        "confidence_notes",
     ]:
         if col in preds.columns:
             keep_cols.append(col)

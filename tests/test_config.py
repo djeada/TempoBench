@@ -55,7 +55,65 @@ def test_load_config_rejects_unknown_cmd_placeholder(tmp_path: Path):
         grid:
           n: [1]
     """))
-    with pytest.raises(ValueError, match="missing grid key\\(s\\): missing"):
+    with pytest.raises(ValueError, match="unknown placeholder\\(s\\): missing"):
+        load_config(cfg_file)
+
+
+def test_load_config_accepts_builtin_python_placeholder(tmp_path: Path):
+    cfg_file = tmp_path / "bench.yaml"
+    cfg_file.write_text(textwrap.dedent("""\
+        benchmarks:
+          - name: portable
+            cmd: "{python} script.py --n {n}"
+        grid:
+          n: [1]
+    """))
+    cfg = load_config(cfg_file)
+    assert cfg.benchmarks[0].cmd == "{python} script.py --n {n}"
+
+
+def test_load_config_rejects_empty_benchmarks(tmp_path: Path):
+    cfg_file = tmp_path / "bench.yaml"
+    cfg_file.write_text("grid:\n  n: [1]\n")
+    with pytest.raises(ValueError, match="no benchmarks defined"):
+        load_config(cfg_file)
+
+
+def test_load_config_rejects_empty_grid_axis(tmp_path: Path):
+    cfg_file = tmp_path / "bench.yaml"
+    cfg_file.write_text(textwrap.dedent("""\
+        benchmarks:
+          - name: t
+            cmd: "echo {n}"
+        grid:
+          n: []
+    """))
+    with pytest.raises(ValueError, match="empty sweep: n"):
+        load_config(cfg_file)
+
+
+@pytest.mark.parametrize(
+    "limits, message",
+    [
+        ("metric: nonsense", "limits.metric must be one of"),
+        ("repeats: 0", "limits.repeats must be at least 1"),
+        ("warmups: -1", "limits.warmups must not be negative"),
+        ("workers: 0", "limits.workers must be at least 1"),
+        ("timeout_sec: 0", "limits.timeout_sec must be positive"),
+    ],
+)
+def test_load_config_rejects_unusable_limits(tmp_path: Path, limits: str, message: str):
+    cfg_file = tmp_path / "bench.yaml"
+    cfg_file.write_text(textwrap.dedent(f"""\
+        benchmarks:
+          - name: t
+            cmd: "echo {{n}}"
+        grid:
+          n: [1]
+        limits:
+          {limits}
+    """))
+    with pytest.raises(ValueError, match=message):
         load_config(cfg_file)
 
 
@@ -74,3 +132,4 @@ def test_limits_defaults():
     assert lim.rss_poll_interval_sec == 0.01
     assert lim.shuffle is True
     assert lim.growth_key == "n"
+    assert lim.metric == "auto"

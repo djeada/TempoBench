@@ -15,7 +15,7 @@ def create_dashboard(
     summary_csv: Path,
     runs_jsonl: Path | None = None,
     x: str = "n",
-    color: str = "impl",
+    color: str | None = "impl",
     title: str = "TempoBench Dashboard",
     log_x: bool = False,
     log_y: bool = False,

@@ -159,7 +159,19 @@ def _log_log_slope(x: List[float], y: List[float]) -> float:
 
 
 def _slope_to_model(slope: float) -> str:
-    """Map a log-log slope to the nearest complexity class."""
+    """Map a log-log slope to a coarse complexity class.
+
+    This is a hint, not a classifier: it is consulted only for series too short
+    for model comparison, and as a tie-breaker in the step-down guard.
+
+    It deliberately does not return O(√n), whose true slope of 0.5 sits inside
+    the band this function assigns to O(n).  Carving out a √n band would take
+    that range away from O(n), and a linear series carrying a fixed additive
+    cost — process startup being the common case — measures a depressed slope
+    that lands squarely in it.  Mislabelling ordinary linear code as O(√n) is
+    the worse error, and O(√n) remains reachable through the AIC comparison in
+    `selection._select_model`, which is not fooled by an additive offset.
+    """
     if slope < 0.08:
         return "O(1)"
     if slope < 0.45:

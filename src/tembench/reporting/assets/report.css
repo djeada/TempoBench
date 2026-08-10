@@ -122,6 +122,7 @@ body {
 }
 .stat-card.ok    { border-left: 4px solid var(--c-green); }
 .stat-card.warn  { border-left: 4px solid var(--c-amber); }
+.warn-text      { color: var(--c-amber); }
 .stat-card.err   { border-left: 4px solid var(--c-red);   }
 
 /* ---- Tables ---- */

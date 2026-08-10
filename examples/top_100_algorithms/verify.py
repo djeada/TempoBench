@@ -14,9 +14,19 @@ from rich.table import Table
 
 from tembench.complexity import fit_models
 
-from .catalog import ALGORITHMS
+from .catalog import ALGORITHMS, acceptable_classes
 from .probes import count_python_steps, median_runtime_ns
 
+#: Input sizes swept per expected class.
+#:
+#: These have to be large enough that the asymptotic term dominates, or the
+#: measured exponent lands between two classes and the answer depends on
+#: incidental constants.  The cubic row learned this the hard way: at
+#: n = 3…21 the step curves of `matrix-chain-order` and `optimal-bst` measure
+#: an exponent of roughly 2.2–2.4, straddling the O(n²)/O(n³) boundary, so
+#: they classified as O(n³) on Python 3.12 and O(n²) on 3.13 — which emits
+#: fewer line events for the same source.  At n = 5…80 both are unambiguous on
+#: either interpreter.
 SIZES = {
     "O(1)": [64, 256, 1024, 4096, 16384],
     "O(log n)": [16, 64, 256, 1024, 4096],
@@ -24,11 +34,13 @@ SIZES = {
     "O(n)": [100, 500, 2500, 12500],
     "O(n log n)": [50, 250, 1250, 6250, 31250],
     "O(n²)": [8, 16, 32, 64, 128],
-    "O(n³)": [3, 5, 8, 13, 21],
+    "O(n³)": [5, 10, 20, 40, 80],
     "O(n² 2^n)": [4, 5, 6, 7, 8],
 }
 
-TIME_SIZES = {**SIZES, "O(n³)": [5, 10, 20, 40, 80]}
+#: Wall-clock probing sweeps the same sizes; kept as a separate name because
+#: the two need not stay identical.
+TIME_SIZES = dict(SIZES)
 
 
 def collect(repeats: int = 5) -> pd.DataFrame:
@@ -63,8 +75,11 @@ def add_fits(measurements: pd.DataFrame) -> pd.DataFrame:
     time_fits = fit_models(time_data, "n", "runtime_ns", keys)[["algorithm", "model"]].rename(columns={"model": "measured_time"})
     report = measurements[["algorithm", "category", "expected", "assumption"]].drop_duplicates()
     report = report.merge(step_fits, on="algorithm").merge(time_fits, on="algorithm")
-    report["steps_match"] = report["expected"] == report["measured_steps"]
-    report["time_matches"] = report["expected"] == report["measured_time"]
+    def matches(row: pd.Series, measured: str) -> bool:
+        return row[measured] in acceptable_classes(row["algorithm"], row["expected"])
+
+    report["steps_match"] = report.apply(matches, axis=1, measured="measured_steps")
+    report["time_matches"] = report.apply(matches, axis=1, measured="measured_time")
     return report.sort_values(["category", "algorithm"])
 
 

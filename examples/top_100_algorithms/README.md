@@ -2,9 +2,8 @@
 
 This suite contains 100 directly runnable, deterministic pure-Python demos.
 Every entry declares the input assumption under which its expected bound is
-measured. This suite also extends TempoBench's canonical model set with
-`O(√n)` and `O(n² 2^n)`, alongside `O(1)`, `O(log n)`, `O(n)`,
-`O(n log n)`, `O(n²)`, and `O(n³)`.
+measured. It exercises TempoBench's full model set: `O(1)`, `O(log n)`,
+`O(√n)`, `O(n)`, `O(n log n)`, `O(n²)`, `O(n³)`, and `O(n² 2^n)`.
 
 ## Run one demo
 

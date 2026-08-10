@@ -28,7 +28,7 @@ jobs:
           cat > smoke.yaml <<'YAML'
           benchmarks:
             - name: smoke
-              cmd: "python examples/sort_impl.py --n {n} --impl {impl}"
+              cmd: "{python} examples/sort_impl.py --n {n} --impl {impl}"
           grid:
             n: [100, 1000]
             impl: ["random", "sorted"]
@@ -36,7 +36,27 @@ jobs:
             timeout_sec: 5
             warmups: 0
             repeats: 1
+            metric: reported
           YAML
+          tembench validate --config smoke.yaml
           tembench run --config smoke.yaml --out-dir artifacts --quiet
           tembench summarize --runs artifacts/runs.jsonl --out-csv artifacts/summary.csv
           tembench plot --summary artifacts/summary.csv --out-html artifacts/runtime.html --no-fit
+
+      - name: A broken benchmark must fail the build
+        if: matrix.python-version == '3.12'
+        run: |
+          cat > broken.yaml <<'YAML'
+          benchmarks:
+            - name: broken
+              cmd: "definitely-not-a-real-command-xyz {n}"
+          grid:
+            n: [1]
+          limits:
+            warmups: 0
+            repeats: 1
+          YAML
+          if tembench run --config broken.yaml --out-dir broken-artifacts; then
+            echo "::error::tembench run reported success for a benchmark that never ran"
+            exit 1
+          fi

@@ -11,10 +11,16 @@ from ._common import PALETTE, label
 
 def plot_boxplot(
     runs_jsonl: Path,
-    x: str = "impl",
-    y: str = "wall_ms",
+    x: str | None = "impl",
+    y: str | None = None,
 ) -> alt.Chart:
-    """Create a boxplot from raw JSONL runs."""
+    """Create a boxplot from raw JSONL runs.
+
+    With `y` unset the duration is chosen the same way `summarize` chooses it —
+    self-reported when every successful trial supplied one, otherwise wall clock
+    — so the spread shown here is the spread of the numbers that were actually
+    fitted, not of a different metric.
+    """
     rows = []
     with runs_jsonl.open() as f:
         for line in f:
@@ -36,6 +42,12 @@ def plot_boxplot(
         )
 
     df = pd.DataFrame(rows)
+    if y is None:
+        reported_complete = (
+            "reported_ms" in df.columns and df["reported_ms"].notna().all()
+        )
+        y = "reported_ms" if reported_complete else "wall_ms"
+
     if x not in df.columns or y not in df.columns:
         return (
             alt.Chart(pd.DataFrame())
@@ -43,7 +55,7 @@ def plot_boxplot(
             .encode(text=alt.value("Required columns not found"))
         )
 
-    highlight = alt.selection_point(name="box_highlight", fields=[x], bind="legend")
+    highlight = alt.selection_point(name="box_highlight", fields=[str(x)], bind="legend")
 
     return (
         alt.Chart(df)

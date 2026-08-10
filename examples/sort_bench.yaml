@@ -1,6 +1,6 @@
 benchmarks:
   - name: py_sort
-    cmd: "python examples/sort_impl.py --n {n} --impl {impl}"
+    cmd: "{python} examples/sort_impl.py --n {n} --impl {impl}"
     workdir: "."
     env: {}
 
@@ -11,6 +11,8 @@ grid:
 limits:
   timeout_sec: 30
   warmups: 1
-  repeats: 3
+  repeats: 5
+  # sort_impl.py times its own sort call and prints a TEMPOBENCH_MS marker.
+  metric: reported
 
 pin_cpu: 0
