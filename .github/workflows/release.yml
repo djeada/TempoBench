@@ -40,14 +40,39 @@ jobs:
           python -m pip install -e .
           python -m pip install "nuitka>=2.5" ordered-set zstandard
 
+      - name: Check the tag matches the packaged version
+        shell: python
+        run: |
+          import os
+          import sys
+
+          import tembench
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          expected = tembench.__version__
+          if tag.lstrip("v") != expected:
+              print(
+                  f"Tag {tag!r} does not match __version__ {expected!r}. "
+                  "Releasing them out of step ships binaries that misreport "
+                  "which version they are."
+              )
+              sys.exit(1)
+          print(f"Tag {tag} matches version {expected}")
+
       - name: Create Nuitka entrypoint
         shell: python
         run: |
           from pathlib import Path
           Path("build").mkdir(exist_ok=True)
+          # The import stays inside the __main__ guard: Nuitka re-executes the
+          # entry module in the compiled binary, and importing at module level
+          # has broken this build before (see build.yml, which matches).
           Path("build/tembench_entry.py").write_text(
-              "from tembench.cli import app\n\n"
+              "#!/usr/bin/env python3\n"
+              "# -*- coding: utf-8 -*-\n"
+              "import sys\n"
               "if __name__ == '__main__':\n"
+              "    from tembench.cli import app\n"
               "    app()\n",
               encoding="utf-8",
           )
@@ -61,6 +86,7 @@ jobs:
           --output-dir=dist
           --output-filename=tembench
           --include-package=tembench
+          --include-package-data=tembench
           --include-package-data=altair
           build/tembench_entry.py
 
@@ -73,10 +99,76 @@ jobs:
           --output-dir=dist
           --output-filename=tembench
           --include-package=tembench
+          --include-package-data=tembench
           --include-package-data=altair
           --windows-console-mode=force
           --mingw64
           build/tembench_entry.py
+
+      - name: Smoke test the executable
+        shell: python
+        run: |
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          runner_os = os.environ["RUNNER_OS"]
+          exe = (
+              Path("dist/tembench.dist/tembench.exe")
+              if runner_os == "Windows"
+              else Path("dist/tembench")
+          )
+          if not exe.is_file():
+              print(f"No executable at {exe}")
+              sys.exit(1)
+
+          env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+
+          def run(*args: str) -> subprocess.CompletedProcess:
+              print(f"$ {exe} {' '.join(args)}")
+              result = subprocess.run(
+                  [str(exe), *args], capture_output=True, text=True,
+                  encoding="utf-8", errors="replace", timeout=300, env=env,
+              )
+              print(result.stdout[-4000:])
+              if result.returncode != 0:
+                  print(result.stderr[-4000:])
+              return result
+
+          if run("--help").returncode != 0:
+              print("The binary does not start.")
+              sys.exit(1)
+
+          # `--help` never touches the packaged CSS/JS or altair's schema data,
+          # so it cannot tell a working binary from one missing its data files.
+          # Generating a chart and a report does.
+          work = Path("smoke")
+          work.mkdir(exist_ok=True)
+          (work / "summary.csv").write_text(
+              "bench,impl,n,time_ms_median,time_ms_count,time_ms_p10,time_ms_p90\n"
+              "b,a,100,1.0,5,0.9,1.1\n"
+              "b,a,200,2.1,5,2.0,2.2\n"
+              "b,a,400,4.0,5,3.9,4.1\n"
+              "b,a,800,8.2,5,8.0,8.4\n",
+              encoding="utf-8",
+          )
+
+          if run("plot", "--summary", str(work / "summary.csv"),
+                 "--out-html", str(work / "runtime.html")).returncode != 0:
+              print("Chart generation failed — altair data files are likely missing.")
+              sys.exit(1)
+
+          if run("report", "--summary", str(work / "summary.csv"),
+                 "--output", str(work / "report.html")).returncode != 0:
+              print("Report generation failed — packaged assets are likely missing.")
+              sys.exit(1)
+
+          report = (work / "report.html").read_text(encoding="utf-8")
+          if "sysinfo-grid" not in report or "theme-toggle" not in report:
+              print("Report is missing its packaged stylesheet or script.")
+              sys.exit(1)
+          print(f"Report OK ({len(report)} bytes)")
 
       - name: Package artifact
         shell: python
@@ -156,4 +248,6 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
           files: release/tembench-*

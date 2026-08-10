@@ -63,6 +63,7 @@ jobs:
           --output-dir=dist
           --output-filename=tembench
           --include-package=tembench
+          --include-package-data=tembench
           --include-package-data=altair
           --enable-plugin=anti-bloat
           build/tembench_entry.py
@@ -76,6 +77,7 @@ jobs:
           --output-dir=dist
           --output-filename=tembench_entry
           --include-package=tembench
+          --include-package-data=tembench
           --include-package-data=altair
           --enable-plugin=anti-bloat
           --windows-console-mode=force
