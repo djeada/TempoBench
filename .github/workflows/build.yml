@@ -61,7 +61,7 @@ jobs:
           --onefile
           --assume-yes-for-downloads
           --output-dir=dist
-          --output-filename=tembench
+          --output-filename=tembench.bin
           --include-package=tembench
           --include-package-data=tembench
           --include-package-data=altair
@@ -101,13 +101,13 @@ jobs:
                   "dist/tembench_entry.dist/tembench_entry.exe",
                   "dist/tembench_entry.exe",
               ],
-              "Linux": ["dist/tembench"],
-              "macOS": ["dist/tembench"],
+              "Linux": ["dist/tembench.bin"],
+              "macOS": ["dist/tembench.bin"],
           }[runner_os]
 
           candidates = [p for p in expected_candidates if os.path.isfile(p)]
           if not candidates:
-              wanted_name = "tembench.exe" if runner_os == "Windows" else "tembench"
+              wanted_name = "tembench.exe" if runner_os == "Windows" else "tembench.bin"
               candidates = [
                   str(p)
                   for p in sorted(Path("dist").rglob(wanted_name))
@@ -203,8 +203,8 @@ jobs:
 
           expected = {
               "Windows": "dist/tembench_entry.exe",
-              "Linux": "dist/tembench",
-              "macOS": "dist/tembench",
+              "Linux": "dist/tembench.bin",
+              "macOS": "dist/tembench.bin",
           }[runner_os]
 
           src_candidates = [expected] if os.path.isfile(expected) else []
