@@ -46,7 +46,7 @@ def run_benchmarks(
         except Exception:
             pass
 
-    write_provenance(out_path.parent, seed=seed, workers=workers)
+    write_provenance(out_path.parent, seed=seed, workers=workers, append=append)
 
     if workers == 1:
         _run_serial(

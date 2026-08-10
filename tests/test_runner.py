@@ -208,6 +208,46 @@ def test_run_benchmarks_prune_on_timeout_fires_skip_callbacks(tmp_path: Path):
     ]
 
 
+def test_prune_on_timeout_does_not_truncate_a_different_series(tmp_path: Path):
+    """A slow implementation must not cut short the sweep of a fast one.
+
+    Both share the `n` axis, so pruning keyed on `n` alone would skip the fast
+    implementation at every size at which the slow one timed out — quietly
+    starving its complexity fit of the data points it needs.
+    """
+    cfg = Config(
+        benchmarks=[Benchmark(name="mixed", cmd="{cmd}")],
+        grid={
+            "n": [1, 2, 3],
+            "cmd": [
+                'python3 -c "import time; time.sleep(0.5)"',  # always times out
+                "python3 -c \"print('fast')\"",  # always finishes
+            ],
+        },
+        limits=Limits(
+            timeout_sec=0.1,
+            warmups=0,
+            repeats=1,
+            shuffle=False,
+            prune_on_timeout=True,
+        ),
+    )
+    out = tmp_path / "runs.jsonl"
+    run_benchmarks(cfg, out, seed=0)
+
+    records = [json.loads(line) for line in out.read_text().strip().split("\n")]
+    by_cmd: dict[str, list[str]] = {}
+    for rec in records:
+        by_cmd.setdefault(str(rec["params"]["cmd"]), []).append(str(rec["status"]))
+
+    slow = next(v for k, v in by_cmd.items() if "sleep" in k)
+    fast = next(v for k, v in by_cmd.items() if "sleep" not in k)
+
+    assert "timeout" in slow
+    assert "skipped" in slow, "the slow series should still be pruned"
+    assert fast == ["ok", "ok", "ok"], f"the fast series was truncated: {fast}"
+
+
 def test_run_benchmarks_parallel_uses_single_pool_for_multiple_benchmarks(
     tmp_path: Path, monkeypatch
 ):

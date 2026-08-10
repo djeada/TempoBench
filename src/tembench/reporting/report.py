@@ -8,10 +8,13 @@ from typing import Optional
 
 import pandas as pd
 
+from .. import PROJECT_URL
+from ..runner.provenance import read_provenance
+from ..summarize import preferred_time_column
+from ..system import get_system_info
 from .extract import _extract_vega_spec
 from .formatting import _stat_card, _table_html
 from .resources import render_head_assets, render_theme_toggle
-from .system import get_system_info
 
 
 def generate_report(
@@ -21,16 +24,52 @@ def generate_report(
     chart_html: Optional[Path] = None,
     title: str = "TempoBench Report",
     output_path: Optional[Path] = None,
+    provenance_json: Optional[Path] = None,
 ) -> str:
-    """Generate a comprehensive HTML report."""
+    """Generate a comprehensive HTML report.
+
+    The System Information section describes the machine the benchmark ran on,
+    taken from the provenance snapshot written next to the results.  Falling
+    back to the current machine is only correct when the report is produced
+    where the run happened, so that case is labelled rather than assumed.
+    """
     df = pd.read_csv(summary_csv)
-    sysinfo = get_system_info()
+
+    recorded = read_provenance(provenance_json) if provenance_json else None
+    recorded_system = (recorded or {}).get("system")
+    if isinstance(recorded_system, dict) and recorded_system:
+        sysinfo = recorded_system
+        sysinfo_origin = "Recorded when the benchmark ran"
+    else:
+        sysinfo = get_system_info()
+        sysinfo_origin = "This machine — no provenance snapshot was found"
+
+    # Results built up with `--append` can span several runs, and comparing
+    # timings measured on different hardware is meaningless — so say so.
+    earlier_runs = (recorded or {}).get("previous") or []
+    if isinstance(earlier_runs, list) and earlier_runs:
+        hosts = {
+            str((run.get("system") or {}).get("hostname", "unknown"))
+            for run in earlier_runs
+            if isinstance(run, dict)
+        }
+        hosts.add(str(sysinfo.get("hostname", "unknown")))
+        total_runs = len(earlier_runs) + 1
+        sysinfo_origin = (
+            f"Recorded when the benchmark ran — results combine {total_runs} appended runs"
+        )
+        if len(hosts) > 1:
+            sysinfo_origin += (
+                f'. <strong class="warn-text">Those runs used {len(hosts)} different '
+                "machines, so their timings are not comparable.</strong>"
+            )
 
     cards = []
-    if "wall_ms_median" in df.columns:
-        cards.append(_stat_card(f"{df['wall_ms_median'].min():.1f} ms", "Fastest"))
-        cards.append(_stat_card(f"{df['wall_ms_median'].max():.1f} ms", "Slowest"))
-        cards.append(_stat_card(f"{df['wall_ms_median'].mean():.1f} ms", "Average"))
+    time_col = preferred_time_column(df.columns)
+    if time_col:
+        cards.append(_stat_card(f"{df[time_col].min():.1f} ms", "Fastest"))
+        cards.append(_stat_card(f"{df[time_col].max():.1f} ms", "Slowest"))
+        cards.append(_stat_card(f"{df[time_col].mean():.1f} ms", "Average"))
     if "peak_rss_mb_median" in df.columns:
         cards.append(
             _stat_card(f"{df['peak_rss_mb_median'].max():.1f} MB", "Peak Memory")
@@ -85,13 +124,18 @@ def generate_report(
 
     fits_section = ""
     if fits_csv and fits_csv.exists():
-        fits_df = pd.read_csv(fits_csv)
+        try:
+            fits_df = pd.read_csv(fits_csv)
+        except pd.errors.EmptyDataError:
+            fits_df = pd.DataFrame()
         if not fits_df.empty:
             fits_section = f"""
     <div class="section">
       <h2><span class="icon">📐</span> Complexity Analysis</h2>
       <p class="desc">Best-fit Big-O complexity class per implementation, selected via AIC.
-        The upper-bound curve satisfies T(n) ≤ C·f(n) + baseline for all observed data.</p>
+        The upper-bound curve satisfies T(n) ≤ C·f(n) + baseline for all observed data.
+        <strong>Confidence</strong> states whether the measurements can support the class:
+        anything below <em>high</em> lists the caveats that weakened it.</p>
       {_table_html(fits_df, highlight_col='formula')}
     </div>"""
 
@@ -110,12 +154,27 @@ def generate_report(
         )
 
     cpu_cores = (
-        f"{sysinfo['cpu_count_physical']} physical / "
-        f"{sysinfo['cpu_count_logical']} logical"
+        f"{sysinfo.get('cpu_count_physical', 'N/A')} physical / "
+        f"{sysinfo.get('cpu_count_logical', 'N/A')} logical"
     )
-    memory_total = f"{sysinfo['memory_total_gb']} GB"
+    memory_total = f"{sysinfo.get('memory_total_gb', 'N/A')} GB"
+
+    run_rows = ""
+    if recorded:
+        run_rows = "".join(
+            _si_value(label, str(recorded[key]))
+            for label, key in [
+                ("Run At", "ts"),
+                ("Seed", "seed"),
+                ("Workers", "workers"),
+                ("Working Dir", "cwd"),
+                ("Invocation", "cmdline"),
+            ]
+            if key in recorded
+        )
 
     sysinfo_html = f"""
+      <p class="desc">{sysinfo_origin}</p>
       <div class="sysinfo-grid">
         <div>
           {_si('platform', 'Platform')}
@@ -127,10 +186,12 @@ def generate_report(
           {_si_value('Memory', memory_total)}
           {_si('architecture', 'Architecture')}
         </div>
-      </div>"""
+      </div>
+      {f'<div class="sysinfo-grid"><div>{run_rows}</div></div>' if run_rows else ''}"""
 
-    date_str = sysinfo["timestamp"][:10]
-    ts_str = sysinfo["timestamp"]
+    generated_at = get_system_info()["timestamp"]
+    date_str = generated_at[:10]
+    ts_str = generated_at
     head_assets = render_head_assets()
     theme_toggle_html = render_theme_toggle()
 
@@ -172,7 +233,7 @@ def generate_report(
     </div>
 
     <div class="report-footer">
-      <p>Generated by <a href="https://github.com/tempobench/tempobench">TempoBench</a> · {ts_str}</p>
+      <p>Generated by <a href="{PROJECT_URL}">TempoBench</a> · {ts_str}</p>
     </div>
 
   </div>

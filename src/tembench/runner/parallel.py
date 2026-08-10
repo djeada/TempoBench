@@ -48,6 +48,7 @@ def _run_parallel(
                     cfg.limits.repeats,
                     retries,
                     poll_interval_sec,
+                    cfg.limits.metric,
                 )
                 future_to_params[fut] = params
 

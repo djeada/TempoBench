@@ -18,7 +18,23 @@ from rich.table import Table
 
 from ...config import load_config
 from ...runner import expand_grid, run_benchmarks
-from ..app import app, console, print_artifact, print_heading
+from ..app import app, console, fail, print_artifact, print_heading
+
+#: Statuses that always indicate a broken setup or a crashing command.
+_BROKEN_STATUSES = ("error", "failed")
+#: Statuses that a sweep may produce on purpose, e.g. when probing for the
+#: input size at which an implementation stops being viable.
+_TOLERATED_STATUSES = ("timeout", "skipped")
+
+
+def _failure_reason(record: dict) -> str:
+    """Summarize why a trial did not succeed, preferring the command's own words."""
+    for stream in ("stderr", "stdout"):
+        text = str(record.get(stream) or "").strip()
+        if text:
+            return text.splitlines()[-1].strip()[:160]
+    rc = record.get("rc")
+    return f"exit code {rc}" if rc is not None else "no output captured"
 
 
 @app.command()
@@ -35,6 +51,16 @@ def run(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress progress output"),
     workers: int = typer.Option(
         0, "--workers", "-j", help="Parallel workers (0 = use config value, default 1)"
+    ),
+    allow_failures: bool = typer.Option(
+        False,
+        "--allow-failures",
+        help="Exit 0 even when trials fail (default: a failed or errored trial exits 1)",
+    ),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="Also exit non-zero on timed-out or skipped trials",
     ),
 ):
     """Execute configured benchmarks and write JSONL results.
@@ -96,22 +122,29 @@ def run(
     else:
         run_benchmarks(cfg, results_path, seed=seed, retries=retries, append=append)
 
-    if not quiet:
-        elapsed = time.perf_counter() - started
-        statuses: dict[str, int] = {}
-        measured_ms = 0.0
-        with results_path.open() as handle:
-            handle.seek(initial_size)
-            for line in handle:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                status = str(record.get("status", "unknown"))
-                statuses[status] = statuses.get(status, 0) + 1
-                if record.get("wall_ms") is not None:
-                    measured_ms += float(record["wall_ms"])
+    elapsed = time.perf_counter() - started
+    statuses: dict[str, int] = {}
+    reasons: dict[tuple[str, str], int] = {}
+    measured_ms = 0.0
+    with results_path.open() as handle:
+        handle.seek(initial_size)
+        for line in handle:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            status = str(record.get("status", "unknown"))
+            statuses[status] = statuses.get(status, 0) + 1
+            if status in _BROKEN_STATUSES:
+                key = (status, _failure_reason(record))
+                reasons[key] = reasons.get(key, 0) + 1
+            if record.get("wall_ms") is not None:
+                measured_ms += float(record["wall_ms"])
 
+    broken = sum(statuses.get(s, 0) for s in _BROKEN_STATUSES)
+    tolerated = sum(statuses.get(s, 0) for s in _TOLERATED_STATUSES)
+
+    if not quiet:
         console.print()
         summary = Table(title="Run complete", box=None)
         summary.add_column("Successful", justify="right", style="green bold")
@@ -131,8 +164,36 @@ def run(
         console.print(summary)
         if measured_ms:
             console.print(f"[dim]Total measured command time: {measured_ms / 1000:.2f} s[/dim]")
+
+        if reasons:
+            console.print()
+            why = Table(title="Why trials did not succeed", box=None, title_style="red bold")
+            why.add_column("Status", style="red")
+            why.add_column("Count", justify="right")
+            why.add_column("Last message from the command", overflow="fold")
+            for (status, reason), count in sorted(
+                reasons.items(), key=lambda item: -item[1]
+            ):
+                why.add_row(status, str(count), reason)
+            console.print(why)
+
         console.print()
         print_artifact("Raw benchmark data", results_path)
+
+    if statuses.get("ok", 0) == 0:
+        raise fail(
+            "No trial succeeded — there is nothing to summarize.",
+            f"Inspect the captured output: tembench inspect --runs {results_path}",
+        )
+    if broken and not allow_failures:
+        raise fail(
+            f"{broken} trial(s) failed or errored.",
+            "Re-run with --allow-failures to keep the partial results and exit 0.",
+        )
+    if tolerated and strict and not allow_failures:
+        raise fail(f"{tolerated} trial(s) timed out or were skipped (--strict).")
+
+    if not quiet:
         console.print()
         console.print("[bold]Next step[/bold]")
         console.print(f"  tembench summarize --runs {results_path} --out-csv {out_dir / 'summary.csv'}")

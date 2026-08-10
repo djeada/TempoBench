@@ -17,6 +17,7 @@ class TrialResult(Mapping[str, object]):
     status: TrialStatus
     rc: int | None = None
     wall_ms: float | None = None
+    reported_ms: float | None = None
     peak_rss_mb: float | None = None
     stdout: str | None = None
     stderr: str | None = None
@@ -37,6 +38,7 @@ class TrialResult(Mapping[str, object]):
             status=self.status,
             rc=self.rc,
             wall_ms=self.wall_ms,
+            reported_ms=self.reported_ms,
             peak_rss_mb=self.peak_rss_mb,
             stdout=self.stdout,
             stderr=self.stderr,
@@ -61,6 +63,8 @@ class TrialResult(Mapping[str, object]):
             record["rc"] = self.rc
         if self.wall_ms is not None:
             record["wall_ms"] = self.wall_ms
+        if self.reported_ms is not None:
+            record["reported_ms"] = self.reported_ms
         if self.peak_rss_mb is not None:
             record["peak_rss_mb"] = self.peak_rss_mb
         if self.stdout is not None:
@@ -78,6 +82,7 @@ class TrialResult(Mapping[str, object]):
             status=record["status"],  # type: ignore[arg-type]
             rc=record.get("rc"),  # type: ignore[arg-type]
             wall_ms=record.get("wall_ms"),  # type: ignore[arg-type]
+            reported_ms=record.get("reported_ms"),  # type: ignore[arg-type]
             peak_rss_mb=record.get("peak_rss_mb"),  # type: ignore[arg-type]
             stdout=record.get("stdout"),  # type: ignore[arg-type]
             stderr=record.get("stderr"),  # type: ignore[arg-type]

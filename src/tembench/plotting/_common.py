@@ -18,6 +18,11 @@ PALETTE = [
 ]
 
 NICE_LABELS = {
+    "time_ms_median": "Time – Median (ms)",
+    "time_ms_mean": "Time – Mean (ms)",
+    "time_ms_p10": "Time – P10 (ms)",
+    "time_ms_p90": "Time – P90 (ms)",
+    "time_ms": "Time (ms)",
     "wall_ms_median": "Wall Time – Median (ms)",
     "wall_ms_mean": "Wall Time – Mean (ms)",
     "wall_ms_p10": "Wall Time – P10 (ms)",
@@ -27,6 +32,7 @@ NICE_LABELS = {
     "n": "Input Size (n)",
     "impl": "Implementation",
     "wall_ms": "Wall Time (ms)",
+    "reported_ms": "Reported Time (ms)",
     "peak_rss_mb": "Peak RSS (MB)",
 }
 
@@ -81,7 +87,10 @@ def apply_theme() -> None:
         alt.themes.enable("tempobench")
 
 
-def label(col: str) -> str:
+def label(col: str | None) -> str:
+    """Human-readable axis title for a column, falling back to its own name."""
+    if col is None:
+        return ""
     return NICE_LABELS.get(col, col)
 
 
@@ -98,8 +107,9 @@ def axis_scale(log_enabled: bool) -> alt.Scale:
     return alt.Scale(type="log") if log_enabled else alt.Scale(zero=True)
 
 
-def shared_color_scale(df: pd.DataFrame, field: str) -> alt.Scale | None:
-    if field not in df.columns:
+def shared_color_scale(df: pd.DataFrame, field: str | None) -> alt.Scale | None:
+    """Fix each series' colour across every chart, so a series keeps its hue."""
+    if field is None or field not in df.columns:
         return None
     values = sorted(df[field].dropna().unique().tolist())
     if not values:
@@ -107,8 +117,8 @@ def shared_color_scale(df: pd.DataFrame, field: str) -> alt.Scale | None:
     return alt.Scale(domain=values, range=PALETTE[: len(values)])
 
 
-def legend_toggle(name: str, field: str, enabled: bool) -> Any | None:
-    if not enabled:
+def legend_toggle(name: str, field: str | None, enabled: bool) -> Any | None:
+    if not enabled or field is None:
         return None
     return alt.selection_point(name=name, fields=[field], bind="legend")
 
@@ -125,7 +135,7 @@ def legend_opacity(
 
 
 def categorical_color(
-    field: str,
+    field: str | None,
     *,
     enabled: bool,
     title: str,
@@ -133,7 +143,7 @@ def categorical_color(
     scale: alt.Scale | None = None,
     legend: alt.Legend | None = None,
 ) -> Any:
-    if not enabled:
+    if not enabled or field is None:
         return alt.value(fallback_color)
     if scale is not None and legend is not None:
         return alt.Color(field, title=title, scale=scale, legend=legend)
