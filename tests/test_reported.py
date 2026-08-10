@@ -136,42 +136,52 @@ def test_interrupting_a_trial_kills_the_child(tmp_path: Path, monkeypatch):
     """Ctrl-C must not hang on the current trial, nor orphan it.
 
     The child runs in its own process group so terminal signals never reach it;
-    if the runner does not kill it explicitly, a long benchmark keeps running
-    with nothing watching it.
+    if the runner does not kill it explicitly, `Popen.__exit__` merely waits and
+    a long benchmark keeps running with nothing watching it.
     """
     import time as _time
+    from types import SimpleNamespace
 
     import psutil
 
     import tembench.runner.process as process_mod
 
-    script = _script(tmp_path, """
-        import time
+    pidfile = tmp_path / "child.pid"
+    script = _script(tmp_path, f"""
+        import os, time
+        open({str(pidfile)!r}, "w").write(str(os.getpid()))
         time.sleep(60)
     """)
 
-    seen: list[int] = []
     real_sleep = _time.sleep
 
-    def interrupt_during_monitoring(seconds):
-        # The runner polls in a sleep loop; a Ctrl-C lands here, not in wait().
-        raise KeyboardInterrupt
+    def interrupt_once_the_child_is_up(seconds):
+        # A Ctrl-C lands in the runner's polling sleep, not in wait().
+        if pidfile.exists():
+            raise KeyboardInterrupt
+        real_sleep(seconds)
 
-    def capture_pid(pid):
-        seen.append(pid)
-        return psutil.Process(pid)
-
-    monkeypatch.setattr(process_mod.time, "sleep", interrupt_during_monitoring)
-    monkeypatch.setattr(process_mod.psutil, "Process", capture_pid)
+    # Rebind the module's own `time` name rather than patching the real time
+    # module: setattr on the module object is global, so subprocess's internal
+    # sleeps would raise too while the runner is terminating the child.
+    monkeypatch.setattr(
+        process_mod,
+        "time",
+        SimpleNamespace(
+            perf_counter=_time.perf_counter, sleep=interrupt_once_the_child_is_up
+        ),
+    )
 
     with pytest.raises(KeyboardInterrupt):
         run_once(f"{sys.executable} {script}", {}, None, None, 0.01)
 
-    assert seen, "the child never started"
+    child_pid = int(pidfile.read_text())
     deadline = _time.time() + 10
     while _time.time() < deadline:
-        if not psutil.pid_exists(seen[0]) or psutil.Process(seen[0]).status() == psutil.STATUS_ZOMBIE:
+        if not psutil.pid_exists(child_pid):
+            break
+        if psutil.Process(child_pid).status() == psutil.STATUS_ZOMBIE:
             break
         real_sleep(0.1)
     else:
-        raise AssertionError("child survived the interrupt")
+        raise AssertionError(f"child {child_pid} survived the interrupt")
