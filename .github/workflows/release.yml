@@ -119,14 +119,19 @@ jobs:
           from pathlib import Path
 
           runner_os = os.environ["RUNNER_OS"]
-          exe = (
-              Path("dist/tembench.dist/tembench.exe")
-              if runner_os == "Windows"
-              else Path("dist/tembench.bin")
-          )
-          if not exe.is_file():
-              print(f"No executable at {exe}")
+          # Nuitka names the standalone directory after the entry module, not
+          # after --output-filename, so the executable lands in
+          # `dist/tembench_entry.dist/`. Search for it instead of assuming a
+          # layout: the assumed one was wrong and no tag had ever exercised it.
+          wanted = "tembench.exe" if runner_os == "Windows" else "tembench.bin"
+          found = sorted(p for p in Path("dist").rglob(wanted) if p.is_file())
+          if not found:
+              print(f"No {wanted} found under dist/. Contents:")
+              for item in sorted(Path("dist").rglob("*")):
+                  print(f"  {item}")
               sys.exit(1)
+          exe = found[0]
+          print(f"Testing {exe}")
 
           env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 
@@ -178,7 +183,6 @@ jobs:
       - name: Package artifact
         shell: python
         run: |
-          import glob
           import os
           import shutil
           import sys
@@ -187,44 +191,37 @@ jobs:
           runner_os = os.environ["RUNNER_OS"]
           release_dir = Path("release")
           release_dir.mkdir(exist_ok=True)
-
-          # Windows uses standalone mode: package the full dist directory.
-          if runner_os == "Windows":
-              standalone_dir = Path("dist/tembench.dist")
-              if standalone_dir.is_dir() and (standalone_dir / "tembench.exe").is_file():
-                  archive_base = release_dir / "tembench-windows"
-                  archive = shutil.make_archive(
-                      str(archive_base),
-                      "zip",
-                      root_dir=standalone_dir.parent,
-                      base_dir=standalone_dir.name,
-                  )
-                  print(f"Packaged artifact: {archive}")
-                  sys.exit(0)
-
-          expected = {
-              "Windows": "dist/tembench.exe",
-              "Linux": "dist/tembench.bin",
-              "macOS": "dist/tembench.bin",
-          }[runner_os]
-
-          src_candidates = [expected] if os.path.isfile(expected) else []
-          if not src_candidates:
-              src_candidates = [
-                  p for p in sorted(glob.glob("dist/tembench*"))
-                  if os.path.isfile(p) and not p.endswith((".cmd", ".ps1"))
-              ]
-          if not src_candidates:
-              print("No binary found to package")
-              sys.exit(1)
-
-          src = src_candidates[0]
           os_slug = runner_os.lower()
-          ext = ".exe" if runner_os == "Windows" else ""
-          dst = release_dir / f"tembench-{os_slug}{ext}"
-          shutil.copy2(src, dst)
-          if runner_os != "Windows":
-              dst.chmod(0o755)
+
+          # Locate the binary the same way the smoke test did, rather than
+          # assuming where Nuitka put it.
+          wanted = "tembench.exe" if runner_os == "Windows" else "tembench.bin"
+          found = sorted(p for p in Path("dist").rglob(wanted) if p.is_file())
+          if not found:
+              print(f"No {wanted} found under dist/. Contents:")
+              for item in sorted(Path("dist").rglob("*")):
+                  print(f"  {item}")
+              sys.exit(1)
+          exe = found[0]
+
+          # Windows builds standalone: the executable needs the whole directory
+          # beside it, so ship the directory as a zip.
+          if runner_os == "Windows":
+              standalone_dir = exe.parent
+              archive = shutil.make_archive(
+                  str(release_dir / "tembench-windows"),
+                  "zip",
+                  root_dir=str(standalone_dir.parent),
+                  base_dir=standalone_dir.name,
+              )
+              print(f"Packaged artifact: {archive}")
+              sys.exit(0)
+
+          # Linux and macOS build onefile: a single self-contained executable,
+          # renamed here from its build-time name.
+          dst = release_dir / f"tembench-{os_slug}"
+          shutil.copy2(exe, dst)
+          dst.chmod(0o755)
           print(f"Packaged artifact: {dst}")
 
       - name: Upload Release Artifacts
