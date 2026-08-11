@@ -1,5 +1,9 @@
 name: Build and Release
 
+# The build job is deliberately identical to build.yml's, which runs on every
+# pull request. If you change the Nuitka flags here, change them there too —
+# otherwise the release builds something no pull request has ever built.
+
 permissions:
   contents: write
 
@@ -66,7 +70,7 @@ jobs:
           Path("build").mkdir(exist_ok=True)
           # The import stays inside the __main__ guard: Nuitka re-executes the
           # entry module in the compiled binary, and importing at module level
-          # has broken this build before (see build.yml, which matches).
+          # has broken this build before.
           Path("build/tembench_entry.py").write_text(
               "#!/usr/bin/env python3\n"
               "# -*- coding: utf-8 -*-\n"
@@ -77,10 +81,10 @@ jobs:
               encoding="utf-8",
           )
 
-      # The binary is built as `tembench.bin` and renamed when packaged.
+      # Built as `tembench.bin` and renamed when packaged:
       # --include-package-data lays the package's data files out under
       # `tembench/`, which cannot coexist with an executable also called
-      # `tembench` on POSIX. Windows is unaffected: there the executable is
+      # `tembench` on POSIX. Windows is unaffected — there the executable is
       # `tembench.exe`, a different name from the data directory.
       - name: Build onefile executable (Linux/macOS)
         if: runner.os != 'Windows'
@@ -110,119 +114,19 @@ jobs:
           --mingw64
           build/tembench_entry.py
 
-      - name: Smoke test the executable
+      - name: Show what Nuitka produced
         shell: python
         run: |
-          import os
-          import subprocess
-          import sys
           from pathlib import Path
+          for item in sorted(Path("dist").rglob("*")):
+              if item.is_file():
+                  print(f"{item.stat().st_size:>12}  {item}")
 
-          runner_os = os.environ["RUNNER_OS"]
-          # Nuitka names the standalone directory after the entry module, not
-          # after --output-filename, so the executable lands in
-          # `dist/tembench_entry.dist/`. Search for it instead of assuming a
-          # layout: the assumed one was wrong and no tag had ever exercised it.
-          wanted = "tembench.exe" if runner_os == "Windows" else "tembench.bin"
-          found = sorted(p for p in Path("dist").rglob(wanted) if p.is_file())
-          if not found:
-              print(f"No {wanted} found under dist/. Contents:")
-              for item in sorted(Path("dist").rglob("*")):
-                  print(f"  {item}")
-              sys.exit(1)
-          exe = found[0]
-          print(f"Testing {exe}")
-
-          env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
-
-          def run(*args: str) -> subprocess.CompletedProcess:
-              print(f"$ {exe} {' '.join(args)}")
-              result = subprocess.run(
-                  [str(exe), *args], capture_output=True, text=True,
-                  encoding="utf-8", errors="replace", timeout=300, env=env,
-              )
-              print(result.stdout[-4000:])
-              if result.returncode != 0:
-                  print(result.stderr[-4000:])
-              return result
-
-          if run("--help").returncode != 0:
-              print("The binary does not start.")
-              sys.exit(1)
-
-          # `--help` never touches the packaged CSS/JS or altair's schema data,
-          # so it cannot tell a working binary from one missing its data files.
-          # Generating a chart and a report does.
-          work = Path("smoke")
-          work.mkdir(exist_ok=True)
-          (work / "summary.csv").write_text(
-              "bench,impl,n,time_ms_median,time_ms_count,time_ms_p10,time_ms_p90\n"
-              "b,a,100,1.0,5,0.9,1.1\n"
-              "b,a,200,2.1,5,2.0,2.2\n"
-              "b,a,400,4.0,5,3.9,4.1\n"
-              "b,a,800,8.2,5,8.0,8.4\n",
-              encoding="utf-8",
-          )
-
-          if run("plot", "--summary", str(work / "summary.csv"),
-                 "--out-html", str(work / "runtime.html")).returncode != 0:
-              print("Chart generation failed — altair data files are likely missing.")
-              sys.exit(1)
-
-          if run("report", "--summary", str(work / "summary.csv"),
-                 "--output", str(work / "report.html")).returncode != 0:
-              print("Report generation failed — packaged assets are likely missing.")
-              sys.exit(1)
-
-          report = (work / "report.html").read_text(encoding="utf-8")
-          if "sysinfo-grid" not in report or "theme-toggle" not in report:
-              print("Report is missing its packaged stylesheet or script.")
-              sys.exit(1)
-          print(f"Report OK ({len(report)} bytes)")
+      - name: Smoke test the executable
+        run: python .github/scripts/smoke_binary.py
 
       - name: Package artifact
-        shell: python
-        run: |
-          import os
-          import shutil
-          import sys
-          from pathlib import Path
-
-          runner_os = os.environ["RUNNER_OS"]
-          release_dir = Path("release")
-          release_dir.mkdir(exist_ok=True)
-          os_slug = runner_os.lower()
-
-          # Locate the binary the same way the smoke test did, rather than
-          # assuming where Nuitka put it.
-          wanted = "tembench.exe" if runner_os == "Windows" else "tembench.bin"
-          found = sorted(p for p in Path("dist").rglob(wanted) if p.is_file())
-          if not found:
-              print(f"No {wanted} found under dist/. Contents:")
-              for item in sorted(Path("dist").rglob("*")):
-                  print(f"  {item}")
-              sys.exit(1)
-          exe = found[0]
-
-          # Windows builds standalone: the executable needs the whole directory
-          # beside it, so ship the directory as a zip.
-          if runner_os == "Windows":
-              standalone_dir = exe.parent
-              archive = shutil.make_archive(
-                  str(release_dir / "tembench-windows"),
-                  "zip",
-                  root_dir=str(standalone_dir.parent),
-                  base_dir=standalone_dir.name,
-              )
-              print(f"Packaged artifact: {archive}")
-              sys.exit(0)
-
-          # Linux and macOS build onefile: a single self-contained executable,
-          # renamed here from its build-time name.
-          dst = release_dir / f"tembench-{os_slug}"
-          shutil.copy2(exe, dst)
-          dst.chmod(0o755)
-          print(f"Packaged artifact: {dst}")
+        run: python .github/scripts/package_binary.py
 
       - name: Upload Release Artifacts
         uses: actions/upload-artifact@v4
