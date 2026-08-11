@@ -1,5 +1,10 @@
 name: Build Nuitka Executables
 
+# This is a rehearsal of release.yml: same Nuitka flags, same smoke test, same
+# packaging step. Keep the two in step. A release job that only runs on a tag is
+# a job whose first execution is the release itself, which is how v0.1.0 shipped
+# nothing.
+
 on:
   push:
     branches: [main]
@@ -38,12 +43,14 @@ jobs:
           python -m pip install -e .
           python -m pip install "nuitka>=2.5" ordered-set zstandard
 
-      - name: Create Nuitka entrypoint  
+      - name: Create Nuitka entrypoint
         shell: python
         run: |
           from pathlib import Path
           Path("build").mkdir(exist_ok=True)
-          # Create a standalone entry point script
+          # The import stays inside the __main__ guard: Nuitka re-executes the
+          # entry module in the compiled binary, and importing at module level
+          # has broken this build before.
           Path("build/tembench_entry.py").write_text(
               "#!/usr/bin/env python3\n"
               "# -*- coding: utf-8 -*-\n"
@@ -54,6 +61,11 @@ jobs:
               encoding="utf-8",
           )
 
+      # Built as `tembench.bin` and renamed when packaged:
+      # --include-package-data lays the package's data files out under
+      # `tembench/`, which cannot coexist with an executable also called
+      # `tembench` on POSIX. Windows is unaffected — there the executable is
+      # `tembench.exe`, a different name from the data directory.
       - name: Build onefile executable (Linux/macOS)
         if: runner.os != 'Windows'
         run: >
@@ -65,7 +77,6 @@ jobs:
           --include-package=tembench
           --include-package-data=tembench
           --include-package-data=altair
-          --enable-plugin=anti-bloat
           build/tembench_entry.py
 
       - name: Build standalone executable (Windows)
@@ -75,155 +86,27 @@ jobs:
           --standalone
           --assume-yes-for-downloads
           --output-dir=dist
-          --output-filename=tembench_entry
+          --output-filename=tembench
           --include-package=tembench
           --include-package-data=tembench
           --include-package-data=altair
-          --enable-plugin=anti-bloat
           --windows-console-mode=force
           --mingw64
           build/tembench_entry.py
 
-      - name: Verify built executable
+      - name: Show what Nuitka produced
         shell: python
         run: |
-          import os
-          import subprocess
-          import sys
           from pathlib import Path
+          for item in sorted(Path("dist").rglob("*")):
+              if item.is_file():
+                  print(f"{item.stat().st_size:>12}  {item}")
 
-          sys.stdout.reconfigure(encoding="utf-8")
-          sys.stderr.reconfigure(encoding="utf-8")
-
-          runner_os = os.environ["RUNNER_OS"]
-          expected_candidates = {
-              "Windows": [
-                  "dist/tembench_entry.dist/tembench_entry.exe",
-                  "dist/tembench_entry.exe",
-              ],
-              "Linux": ["dist/tembench.bin"],
-              "macOS": ["dist/tembench.bin"],
-          }[runner_os]
-
-          candidates = [p for p in expected_candidates if os.path.isfile(p)]
-          if not candidates:
-              wanted_name = "tembench.exe" if runner_os == "Windows" else "tembench.bin"
-              candidates = [
-                  str(p)
-                  for p in sorted(Path("dist").rglob(wanted_name))
-                  if p.is_file() and not str(p).endswith((".cmd", ".ps1"))
-              ]
-          if not candidates:
-              print("No built executable found in dist/")
-              sys.exit(1)
-
-          exe = candidates[0]
-          print(f"Using executable: {exe}")
-          env = os.environ.copy()
-          env.setdefault("PYTHONUTF8", "1")
-          env.setdefault("PYTHONIOENCODING", "utf-8")
-          env.setdefault("NO_COLOR", "1")
-
-          smoke_tests = [["--help"]]
-          if runner_os == "Windows":
-              # On Windows runners, Rich/console detection for --help can be flaky
-              # when executed under captured pipes, so keep a second startup probe.
-              smoke_tests.append(["sysinfo"])
-
-          last_result = None
-          for args in smoke_tests:
-              print(f"Running smoke test: {exe} {' '.join(args)}")
-              result = subprocess.run(
-                  [exe, *args],
-                  capture_output=True,
-                  text=True,
-                  encoding="utf-8",
-                  errors="replace",
-                  timeout=60,
-                  env=env,
-              )
-              print(result.stdout[:8000])
-              if result.returncode == 0:
-                  last_result = result
-                  break
-              print(result.stderr[:8000])
-              print(f"Smoke test failed with exit code {result.returncode}")
-              last_result = result
-
-          if last_result is None or last_result.returncode != 0:
-              sys.exit(1 if last_result is None else last_result.returncode)
+      - name: Smoke test the executable
+        run: python .github/scripts/smoke_binary.py
 
       - name: Package artifact
-        shell: python
-        run: |
-          import glob
-          import os
-          import shutil
-          import sys
-          from pathlib import Path
-
-          runner_os = os.environ["RUNNER_OS"]
-          release_dir = Path("release")
-          release_dir.mkdir(exist_ok=True)
-          os_slug = runner_os.lower()
-
-          # Windows uses standalone mode: package the full dist directory.
-          if runner_os == "Windows":
-              # Try multiple possible locations for the standalone directory
-              standalone_candidates = [
-                  Path("dist/tembench_entry.dist"),
-                  Path("dist") / "tembench_entry.dist",
-              ]
-              
-              standalone_dir = None
-              for candidate in standalone_candidates:
-                  if candidate.is_dir():
-                      exe_path = candidate / "tembench_entry.exe"
-                      if exe_path.is_file():
-                          standalone_dir = candidate
-                          print(f"Found standalone directory: {standalone_dir}")
-                          break
-              
-              if standalone_dir:
-                  archive_base = release_dir / "tembench-windows"
-                  archive = shutil.make_archive(
-                      str(archive_base),
-                      "zip",
-                      root_dir=str(standalone_dir.parent),
-                      base_dir=standalone_dir.name,
-                  )
-                  print(f"Packaged artifact: {archive}")
-                  sys.exit(0)
-              else:
-                  print("Warning: Standalone directory not found, trying fallback...")
-                  # List dist contents for debugging
-                  print("Contents of dist/:")
-                  for item in Path("dist").rglob("*"):
-                      print(f"  {item}")
-
-          expected = {
-              "Windows": "dist/tembench_entry.exe",
-              "Linux": "dist/tembench.bin",
-              "macOS": "dist/tembench.bin",
-          }[runner_os]
-
-          src_candidates = [expected] if os.path.isfile(expected) else []
-          if not src_candidates:
-              src_candidates = [
-                  p for p in sorted(glob.glob("dist/tembench*"))
-                  if os.path.isfile(p) and not p.endswith((".cmd", ".ps1"))
-              ]
-          if not src_candidates:
-              print("No binary found to package")
-              sys.exit(1)
-
-          src = src_candidates[0]
-          ext = ".exe" if runner_os == "Windows" else ""
-          dst = release_dir / f"tembench-{os_slug}{ext}"
-          shutil.copy2(src, dst)
-          if runner_os != "Windows":
-              dst.chmod(0o755)
-          print(f"Packaged artifact: {dst}")
+        run: python .github/scripts/package_binary.py
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
