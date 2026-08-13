@@ -102,8 +102,20 @@ jobs:
               if item.is_file():
                   print(f"{item.stat().st_size:>12}  {item}")
 
-      - name: Smoke test the executable
-        run: python .github/scripts/smoke_binary.py
+      # One step per stage: the public jobs API exposes step names and
+      # conclusions but not log contents, so a Windows-only failure is
+      # diagnosable from outside the repo without a token.
+      - name: "Locate the built binary"
+        run: python .github/scripts/find_binary.py
+
+      - name: "Smoke test 1/3 - the binary starts"
+        run: python .github/scripts/smoke_binary.py help
+
+      - name: "Smoke test 2/3 - render a chart"
+        run: python .github/scripts/smoke_binary.py plot
+
+      - name: "Smoke test 3/3 - render a report"
+        run: python .github/scripts/smoke_binary.py report
 
       - name: Package artifact
         run: python .github/scripts/package_binary.py
