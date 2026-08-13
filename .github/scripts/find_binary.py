@@ -45,3 +45,10 @@ def find_binary(dist: Path = Path("dist"), windows: bool | None = None) -> Path:
         for item in found:
             print(f"  {item}", flush=True)
     return found[0]
+
+
+if __name__ == "__main__":
+    # Run as its own workflow step so "the binary was never found" is
+    # distinguishable from "the binary was found and misbehaved" using only the
+    # public jobs API, which reports step names but not log contents.
+    print(f"Found: {find_binary()}", flush=True)
