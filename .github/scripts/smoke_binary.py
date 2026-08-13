@@ -34,6 +34,17 @@ SUMMARY = (
 )
 
 WORK = Path("smoke")
+# Job logs need a token to read, so a failure on a platform the maintainer
+# cannot reproduce is otherwise invisible from outside the repo. Everything
+# printed here is also appended to this file, which the workflow posts as a
+# commit comment on failure -- commit comments are readable without auth.
+DIAGNOSTICS = Path("smoke-diagnostics.txt")
+
+
+def _log(text: str = "") -> None:
+    print(text, flush=True)
+    with DIAGNOSTICS.open("a", encoding="utf-8") as fh:
+        fh.write(text + "\n")
 
 
 def _env() -> dict[str, str]:
@@ -51,23 +62,29 @@ def _env() -> dict[str, str]:
 
 
 def _run(exe: Path, *args: str) -> int:
-    print(f"$ {exe} {' '.join(args)}", flush=True)
-    result = subprocess.run(
-        [str(exe), *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=300,
-        env=_env(),
-    )
-    # Print both streams whatever happens: on a tag there is no second chance
-    # to reproduce it, and a bare exit code says nothing about why.
-    print(f"--- exit {result.returncode} ---", flush=True)
-    print("--- stdout ---", flush=True)
-    print(result.stdout[-6000:], flush=True)
-    print("--- stderr ---", flush=True)
-    print(result.stderr[-6000:], flush=True)
+    _log(f"$ {exe} {' '.join(args)}")
+    try:
+        result = subprocess.run(
+            [str(exe), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+            env=_env(),
+        )
+    except OSError as exc:
+        # The binary exists but the OS refused to run it at all: a missing
+        # runtime DLL on Windows shows up here, not as a Python traceback.
+        _log(f"--- could not execute: {exc!r} ---")
+        return 1
+    # Log both streams whatever happens: on a tag there is no second chance to
+    # reproduce it, and a bare exit code says nothing about why.
+    _log(f"--- exit {result.returncode} ---")
+    _log("--- stdout ---")
+    _log(result.stdout[-6000:])
+    _log("--- stderr ---")
+    _log(result.stderr[-6000:])
     return result.returncode
 
 
@@ -79,35 +96,46 @@ def _summary() -> Path:
 
 
 def stage_help(exe: Path) -> int:
-    if _run(exe, "--help") != 0:
-        print("FAIL: the binary does not start.", flush=True)
-        return 1
-    return 0
+    if _run(exe, "--help") == 0:
+        return 0
+    # Narrow the failure down in the same run rather than over several. These
+    # separate whether the embedded runtime is broken (nothing works) from
+    # whether it is specifically Rich's help rendering, which draws box
+    # characters a legacy Windows code page cannot encode.
+    _log("\n=== narrowing down: does anything else run? ===")
+    _log("\n[probe] sysinfo — starts the runtime and prints a Rich table")
+    _run(exe, "sysinfo")
+    _log("\n[probe] plot --help — subcommand help, a smaller Rich panel")
+    _run(exe, "plot", "--help")
+    _log("\n[probe] no arguments — Typer prints usage and exits non-zero by design")
+    _run(exe)
+    _log("FAIL: the binary does not start.")
+    return 1
 
 
 def stage_plot(exe: Path) -> int:
     chart = WORK / "runtime.html"
     if _run(exe, "plot", "--summary", str(_summary()), "--out-html", str(chart)) != 0:
-        print("FAIL: chart generation — altair data files are likely missing.", flush=True)
+        _log("FAIL: chart generation — altair data files are likely missing.")
         return 1
     if not chart.is_file() or chart.stat().st_size == 0:
-        print(f"FAIL: {chart} was not written.", flush=True)
+        _log(f"FAIL: {chart} was not written.")
         return 1
-    print(f"OK: chart rendered, {chart.stat().st_size} bytes.", flush=True)
+    _log(f"OK: chart rendered, {chart.stat().st_size} bytes.")
     return 0
 
 
 def stage_report(exe: Path) -> int:
     report = WORK / "report.html"
     if _run(exe, "report", "--summary", str(_summary()), "--output", str(report)) != 0:
-        print("FAIL: report generation — packaged assets are likely missing.", flush=True)
+        _log("FAIL: report generation — packaged assets are likely missing.")
         return 1
     html = report.read_text(encoding="utf-8")
     missing = [m for m in ("sysinfo-grid", "theme-toggle") if m not in html]
     if missing:
-        print(f"FAIL: report is missing packaged assets: {missing}", flush=True)
+        _log(f"FAIL: report is missing packaged assets: {missing}")
         return 1
-    print(f"OK: report rendered, {len(html)} bytes, assets present.", flush=True)
+    _log(f"OK: report rendered, {len(html)} bytes, assets present.")
     return 0
 
 

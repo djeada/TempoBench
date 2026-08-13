@@ -137,6 +137,14 @@ jobs:
       - name: "Smoke test 3/3 - render a report"
         run: python .github/scripts/smoke_binary.py report
 
+      # Temporary: job logs need a token, so a Windows-only failure is
+      # otherwise invisible from a plain checkout. Remove once Windows is green.
+      - name: "Publish smoke diagnostics on failure"
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python .github/scripts/post_diagnostics.py
+
       - name: Package artifact
         run: python .github/scripts/package_binary.py
 

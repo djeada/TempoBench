@@ -1,5 +1,8 @@
 name: Build Nuitka Executables
 
+permissions:
+  contents: write
+
 # This is a rehearsal of release.yml: same Nuitka flags, same smoke test, same
 # packaging step. Keep the two in step. A release job that only runs on a tag is
 # a job whose first execution is the release itself, which is how v0.1.0 shipped
@@ -116,6 +119,14 @@ jobs:
 
       - name: "Smoke test 3/3 - render a report"
         run: python .github/scripts/smoke_binary.py report
+
+      # Temporary: job logs need a token, so a Windows-only failure is
+      # otherwise invisible from a plain checkout. Remove once Windows is green.
+      - name: "Publish smoke diagnostics on failure"
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python .github/scripts/post_diagnostics.py
 
       - name: Package artifact
         run: python .github/scripts/package_binary.py
