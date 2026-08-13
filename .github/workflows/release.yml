@@ -149,6 +149,12 @@ jobs:
 
   release:
     needs: build
+    # Release whatever platforms actually built. `needs: build` alone means one
+    # failing platform produces no release at all, which is how the first
+    # v0.1.0 tag shipped nothing despite Linux and macOS both being fine. The
+    # release is still a draft, and the step below refuses to publish an empty
+    # one, so a total build failure cannot slip through as a release.
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
 
     steps:
@@ -158,8 +164,37 @@ jobs:
           path: ./release
           merge-multiple: true
 
-      - name: List downloaded files
-        run: ls -R ./release
+      - name: Check which platforms made it
+        shell: python
+        run: |
+          import os
+          import sys
+          from pathlib import Path
+
+          expected = {
+              "tembench-linux": "Linux",
+              "tembench-macos": "macOS",
+              "tembench-windows.zip": "Windows",
+          }
+          release = Path("release")
+          present = {f.name for f in release.glob("*") if f.is_file()}
+          for name, label in expected.items():
+              mark = "present" if name in present else "MISSING"
+              size = f" ({(release / name).stat().st_size} bytes)" if name in present else ""
+              print(f"{label:<8} {name:<22} {mark}{size}")
+
+          if not present:
+              print("\nNo binaries built at all. Refusing to create an empty release.")
+              sys.exit(1)
+
+          missing = [label for name, label in expected.items() if name not in present]
+          if missing:
+              # Surfaced in the job summary so the draft is not mistaken for a
+              # complete release when it is reviewed before publishing.
+              note = f"Draft is missing binaries for: {', '.join(missing)}"
+              print(f"\n{note}")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+                  fh.write(f"### Incomplete release\n\n{note}\n")
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
