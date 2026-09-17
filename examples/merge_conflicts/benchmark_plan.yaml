@@ -1,0 +1,13 @@
+benchmarks:
+  - name: quick_sort_demo
+    cmd: "{python} -m examples.top_100_algorithms.demos.quick_sort --n {n} --mode time"
+
+grid:
+  n: [128, 512, 2048]
+
+limits:
+  timeout_sec: 10
+  warmups: 1
+  repeats: 3
+  metric: wall
+  workers: 1
