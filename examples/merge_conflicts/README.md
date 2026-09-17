@@ -43,5 +43,5 @@ number but does not emit TempoBench's optional `TEMPOBENCH_MS` marker.
 
 ## Branch policy notes
 
-The local branch optimizes for fast feedback.
-
+CI policy: favor stable comparisons with a 60-second timeout, 7 repeats, and 2
+workers.
