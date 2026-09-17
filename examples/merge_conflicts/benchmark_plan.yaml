@@ -6,8 +6,8 @@ grid:
   n: [128, 512, 2048]
 
 limits:
-  timeout_sec: 10
+  timeout_sec: 30
   warmups: 1
-  repeats: 3
+  repeats: 2
   metric: wall
-  workers: 1
+  workers: 4
