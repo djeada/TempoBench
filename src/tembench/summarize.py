@@ -10,6 +10,8 @@ import pandas as pd
 TIME_COL = "time_ms"
 #: Column naming where each group's canonical duration came from.
 TIME_SOURCE_COL = "time_source"
+#: Internal column numbering the grid points while a summary is built.
+_GROUP_ID = "_tembench_point"
 
 #: Summary columns that may carry a duration, best first.  Summaries written by
 #: older versions of TempoBench only have the ``wall_ms_*`` family, so consumers
@@ -118,7 +120,7 @@ def infer_series_column(df: pd.DataFrame, x: str | None) -> str | None:
 
 def read_jsonl(path: Path) -> List[dict]:
     rows = []
-    with Path(path).open() as f:
+    with Path(path).open(encoding="utf-8") as f:
         for line in f:
             try:
                 rows.append(json.loads(line))
@@ -156,6 +158,10 @@ def _add_canonical_time(ok: pd.DataFrame, group_cols: List[str]) -> pd.DataFrame
         return ok
 
     reported = pd.to_numeric(ok["reported_ms"], errors="coerce")
+    if "metric" in ok.columns:
+        # `limits.metric: wall` is the user saying not to trust the marker;
+        # the reading is still kept in runs.jsonl, just not used.
+        reported = reported.where(ok["metric"] != "wall")
     complete = (
         reported.notna()
         .groupby([ok[c] for c in group_cols], dropna=False)
@@ -201,16 +207,25 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
         df = df.assign(_group_all="all")
         group_cols = ["_group_all"]
 
+    # Each grid point gets an integer id, so aggregates join back on one plain
+    # column rather than on grid values that may be missing or mixed-type.
+    try:
+        # Trials run in shuffled order; the summary reads best sorted by grid.
+        gid = df.groupby(group_cols, dropna=False, sort=True).ngroup()
+    except TypeError:  # an axis mixing numbers and strings has no order
+        gid = df.groupby(group_cols, dropna=False, sort=False).ngroup()
+    df = df.assign(**{_GROUP_ID: gid})
+
     ok = df[df["status"] == "ok"] if "status" in df.columns else df
-    ok = _add_canonical_time(ok, group_cols)
+    ok = _add_canonical_time(ok, [_GROUP_ID])
     if not include_outliers:
-        ok = _drop_outliers(ok, group_cols)
+        ok = _drop_outliers(ok, [_GROUP_ID])
 
     def p10(s: pd.Series) -> float:
-        return s.quantile(0.1)
+        return float(s.quantile(0.1))
 
     def p90(s: pd.Series) -> float:
-        return s.quantile(0.9)
+        return float(s.quantile(0.9))
 
     p10.__name__ = "p10"
     p90.__name__ = "p90"
@@ -221,26 +236,24 @@ def summarize_runs(path: Path, include_outliers: bool = False) -> pd.DataFrame:
         "peak_rss_mb": ["median", "mean"],
     }
     agg = {col: how for col, how in agg.items() if col in ok.columns}
-    g = ok.groupby(group_cols, dropna=False).agg(cast(Any, agg))
-    flat_columns = cast(Any, g.columns).to_flat_index()
-    g.columns = ["_".join(col) for col in flat_columns]
-    g = g.reset_index()
+    stats = ok.groupby(_GROUP_ID).agg(cast(Any, agg))
+    flat_columns = cast(Any, stats.columns).to_flat_index()
+    stats.columns = ["_".join(col) for col in flat_columns]
 
     if TIME_SOURCE_COL in ok.columns:
-        sources = (
-            ok.groupby(group_cols, dropna=False)[TIME_SOURCE_COL].first().reset_index()
-        )
-        g = g.merge(sources, on=group_cols, how="left")
+        stats[TIME_SOURCE_COL] = ok.groupby(_GROUP_ID)[TIME_SOURCE_COL].first()
+
+    # Every grid point that was attempted gets a row, even one where no trial
+    # succeeded.  Dropping it would make a point that stopped working look like
+    # a point that was never measured, and `compare` would pass it.
+    g = df.drop_duplicates(_GROUP_ID).set_index(_GROUP_ID)[group_cols].sort_index()
+    g = g.join(stats)
 
     # add counts of failures
     if "status" in df.columns:
-        counts = (
-            df.groupby(group_cols + ["status"])
-            .size()
-            .unstack(fill_value=0)
-            .reset_index()
-        )
-        g = g.merge(counts, on=group_cols, how="left")
+        g = g.join(df.groupby([_GROUP_ID, "status"]).size().unstack(fill_value=0))
+
+    g = g.reset_index(drop=True)
     if "_group_all" in g.columns:
         g = g.drop(columns=["_group_all"])
     return g

@@ -5,7 +5,12 @@ from pathlib import Path
 import pandas as pd
 
 from tembench.reporting import compare_summaries
-from tembench.reporting.comparison import comparison_tally
+from tembench.reporting.comparison import (
+    MISSING_CURRENT,
+    NO_TIMING,
+    SOURCE_CHANGED,
+    comparison_tally,
+)
 
 
 def _summary(path: Path, rows: list[dict]) -> Path:
@@ -128,7 +133,7 @@ def test_status_counts_are_not_mistaken_for_grid_keys(tmp_path: Path):
     ])
     baseline = _summary(tmp_path / "base.csv", [
         {"bench": "b", "impl": "a", "n": 100, "time_ms_median": 100.0,
-         "time_source": "wall", "ok": 5},
+         "time_source": "reported", "ok": 5},
     ])
     result = compare_summaries(current, baseline, threshold_pct=5.0)
 
@@ -153,6 +158,7 @@ def test_each_win_is_counted_once_not_once_per_metric(tmp_path: Path):
         "compared": 1,
         "regressions": 0,
         "improvements": 1,
+        "unmeasured": 0,
     }
 
 
@@ -175,7 +181,7 @@ def test_tally_never_reports_more_events_than_configurations(tmp_path: Path):
         threshold_pct=5.0,
     )
     tally = comparison_tally(df, 5.0)
-    assert tally == {"compared": 2, "regressions": 1, "improvements": 1}
+    assert tally == {"compared": 2, "regressions": 1, "improvements": 1, "unmeasured": 0}
 
 
 def test_comparison_report_renders_the_tally(tmp_path: Path):
@@ -193,3 +199,85 @@ def test_comparison_report_renders_the_tally(tmp_path: Path):
     html = generate_comparison_report(df, threshold_pct=5.0)
     assert "No regressions detected" in html
     assert "Improvements" in html
+
+
+def test_a_point_that_stopped_producing_timings_is_a_regression(tmp_path: Path):
+    """NaN > threshold is False; a point that broke must not pass."""
+    result = compare_summaries(
+        _summary(tmp_path / "cur.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 1.0, "ok": 3, "timeout": 0},
+            {"bench": "b", "n": 2, "time_ms_median": None, "ok": 0, "timeout": 3},
+        ]),
+        _summary(tmp_path / "base.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 1.0, "ok": 3, "timeout": 0},
+            {"bench": "b", "n": 2, "time_ms_median": 2.0, "ok": 3, "timeout": 0},
+        ]),
+        threshold_pct=5.0,
+    ).set_index("n")
+    assert bool(result.loc[2, "time_ms_median_regression"]) is True
+    assert result.loc[2, "problem"] == NO_TIMING
+    assert bool(result.loc[1, "time_ms_median_regression"]) is False
+    assert comparison_tally(result.reset_index(), 5.0)["regressions"] == 1
+
+
+def test_a_point_missing_from_the_current_run_is_a_regression(tmp_path: Path):
+    result = compare_summaries(
+        _summary(tmp_path / "cur.csv", [{"bench": "b", "n": 1, "time_ms_median": 1.0}]),
+        _summary(tmp_path / "base.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 1.0},
+            {"bench": "b", "n": 2, "time_ms_median": 2.0},
+        ]),
+    ).set_index("n")
+    assert bool(result.loc[2, "time_ms_median_regression"]) is True
+    assert result.loc[2, "problem"] == MISSING_CURRENT
+
+
+def test_a_new_point_has_nothing_to_regress_against(tmp_path: Path):
+    result = compare_summaries(
+        _summary(tmp_path / "cur.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 1.0},
+            {"bench": "b", "n": 2, "time_ms_median": 2.0},
+        ]),
+        _summary(tmp_path / "base.csv", [{"bench": "b", "n": 1, "time_ms_median": 1.0}]),
+    )
+    assert not result["time_ms_median_regression"].any()
+    assert comparison_tally(result, 5.0)["compared"] == 1
+
+
+def test_a_timing_source_switch_compares_on_wall_clock(tmp_path: Path):
+    """Self-reported vs wall clock differs by process startup, not by the code."""
+    result = compare_summaries(
+        _summary(tmp_path / "cur.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 101.0, "wall_ms_median": 101.0,
+             "time_source": "wall"},
+        ]),
+        _summary(tmp_path / "base.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 1.1, "wall_ms_median": 100.0,
+             "time_source": "reported"},
+        ]),
+        threshold_pct=5.0,
+    )
+    assert bool(result.loc[0, "time_ms_median_regression"]) is False
+    assert result.loc[0, "compared_on"] == "wall_ms"
+    assert pd.isna(result.loc[0, "time_ms_median_delta_pct"])
+
+
+def test_a_timing_source_switch_without_wall_clock_fails(tmp_path: Path):
+    result = compare_summaries(
+        _summary(tmp_path / "cur.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 101.0, "time_source": "wall"},
+        ]),
+        _summary(tmp_path / "base.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 1.1, "time_source": "reported"},
+        ]),
+    )
+    assert bool(result.loc[0, "time_ms_median_regression"]) is True
+    assert result.loc[0, "problem"] == SOURCE_CHANGED
+
+
+def test_summaries_sharing_no_timing_column_cannot_be_compared(tmp_path: Path):
+    result = compare_summaries(
+        _summary(tmp_path / "cur.csv", [{"bench": "b", "n": 1, "time_ms_median": 1.0}]),
+        _summary(tmp_path / "base.csv", [{"bench": "b", "n": 1, "wall_ms_mean": 1.0}]),
+    )
+    assert result.empty

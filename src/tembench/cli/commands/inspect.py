@@ -21,7 +21,9 @@ def inspect(
         dir_okay=False,
         help="Path to JSONL runs",
     ),
-    count: int = typer.Option(10, "--count", "-n", help="Number of runs to show"),
+    count: int = typer.Option(
+        10, "--count", "-n", min=1, help="Number of runs to show"
+    ),
     status: Optional[str] = typer.Option(
         None, help="Filter by status (ok, failed, timeout)"
     ),
@@ -33,7 +35,7 @@ def inspect(
         tembench inspect --status failed
     """
     all_runs = []
-    with runs.open() as f:
+    with runs.open(encoding="utf-8") as f:
         for line in f:
             try:
                 all_runs.append(json.loads(line))

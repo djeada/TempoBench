@@ -12,7 +12,7 @@ import typer
 from rich.table import Table
 
 from ...complexity import fit_models
-from ...plotting import plot_runtime
+from ...plotting import fit_frame, plot_runtime, save_chart
 from ...summarize import (
     TIME_COLUMN_PREFERENCE,
     count_column_for,
@@ -155,7 +155,7 @@ def plot(
     )
     if out_html:
         out_html.parent.mkdir(parents=True, exist_ok=True)
-        chart.save(out_html)
+        save_chart(chart, out_html)
         print_artifact("Runtime plot", out_html)
     else:
         # Print Vega-Lite JSON to stdout for piping
@@ -163,13 +163,13 @@ def plot(
     if no_fit:
         return
 
-    by = [c for c in ["bench", color] if c and c in df.columns]
+    # The printed and exported fits must be the ones drawn: the same bench
+    # filter and the same series grouping as the chart.
+    if bench is not None:
+        df = df[df["bench"] == bench]
+    df, by = fit_frame(df, x, color)
     y_fit = y if y in df.columns else preferred_time_column(df.columns)
     assert y_fit is not None  # guaranteed by the duration-column check above
-    if not by:
-        # A summary with a single unnamed series still deserves a fit.
-        df = df.assign(_series="all")
-        by = ["_series"]
     fits = fit_models(
         df,
         x_col=x,

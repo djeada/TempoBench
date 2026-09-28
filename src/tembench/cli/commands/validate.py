@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 import typer
 from rich.table import Table
 
+from ...command import WINDOWS
 from ...config import Config, load_config
 from ...runner import expand_grid
 from ...runner.grid import _run_grid_point, format_cmd
+from ...runner.process import build_once
 from ...runner.reported import MARKER_NAME
 from ..app import app, console, fail, print_heading
+
+#: Tokens that only mean something to a shell.
+_SHELL_OPERATORS = frozenset({"|", "||", "&&", ";", "&", ">", ">>", "<", "2>", "2>&1"})
 
 
 def _smallest_point(cfg: Config) -> dict[str, object]:
@@ -102,7 +108,20 @@ def validate(
     point = _smallest_point(cfg)
     console.print()
     for bench in cfg.benchmarks:
-        console.print(f"[dim]{bench.name}[/dim]  {format_cmd(bench.cmd, point)}")
+        expanded = format_cmd(bench.cmd, point)
+        console.print(f"[dim]{bench.name}[/dim]  {expanded}")
+        # Without a shell, `a | b` runs `a` with "|" and "b" as arguments — which
+        # usually still exits 0, so the probe alone would not catch it.
+        try:
+            operators = _SHELL_OPERATORS.intersection(shlex.split(expanded))
+        except ValueError:
+            operators = frozenset()
+        if operators and not WINDOWS:
+            console.print(
+                f"    [yellow]![/yellow] {' '.join(sorted(operators))} is passed to the "
+                "program as a literal argument: commands run without a shell. Wrap "
+                "the command in sh -c '…' if it needs one."
+            )
 
     if not probe:
         return
@@ -111,6 +130,11 @@ def validate(
     console.print(f"[bold]Probing the smallest grid point[/bold] {point or '(no grid)'}")
     failures: list[tuple[str, str, str]] = []
     for bench in cfg.benchmarks:
+        # A compiled benchmark's command does not exist until it is built.
+        build_error = build_once(bench)
+        if build_error:
+            failures.append((bench.name, "build failed", build_error))
+            continue
         result = _run_grid_point(
             bench, point, cfg.limits.timeout_sec, 0, 1, 0,
             cfg.limits.rss_poll_interval_sec, cfg.limits.metric,

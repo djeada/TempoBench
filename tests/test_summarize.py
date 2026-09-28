@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from tembench.summarize import preferred_time_column, read_jsonl, summarize_runs
 
 
 def _write_runs(path: Path, records: list[dict]):
-    with path.open("w") as f:
+    with path.open("w", encoding="utf-8") as f:
         for rec in records:
             f.write(json.dumps(rec) + "\n")
 
@@ -115,10 +117,47 @@ def test_self_reported_records_without_wall_time_are_kept(tmp_path: Path):
     assert df.iloc[0]["time_ms_median"] == 3.0
 
 
-def test_records_with_no_duration_at_all_produce_nothing(tmp_path: Path):
+def test_records_with_no_duration_at_all_have_no_timing(tmp_path: Path):
     p = tmp_path / "runs.jsonl"
     _write_runs(p, [{"bench": "t", "status": "ok", "params": {"n": 1}}])
-    assert summarize_runs(p).empty
+    df = summarize_runs(p)
+    assert len(df) == 1
+    assert pd.isna(df.iloc[0]["time_ms_median"])
+
+
+def test_a_point_where_every_trial_failed_keeps_its_row(tmp_path: Path):
+    """Dropping it would make a point that broke look like one never measured."""
+    p = tmp_path / "runs.jsonl"
+    _write_runs(p, [
+        {"bench": "t", "status": "ok", "wall_ms": 5.0, "params": {"n": 1}},
+        {"bench": "t", "status": "timeout", "wall_ms": 9.0, "params": {"n": 2}},
+        {"bench": "t", "status": "timeout", "wall_ms": 9.0, "params": {"n": 2}},
+    ])
+    df = summarize_runs(p).set_index("n")
+    assert list(df.index) == [1, 2]
+    assert pd.isna(df.loc[2, "time_ms_median"])
+    assert df.loc[2, "timeout"] == 2
+    assert df.loc[1, "ok"] == 1
+
+
+def test_rows_are_sorted_by_grid_not_by_shuffled_run_order(tmp_path: Path):
+    p = tmp_path / "runs.jsonl"
+    _write_runs(p, [
+        {"bench": "t", "status": "ok", "wall_ms": float(n), "params": {"n": n}}
+        for n in (100, 10, 1000)
+    ])
+    assert list(summarize_runs(p)["n"]) == [10, 100, 1000]
+
+
+def test_status_counts_survive_a_missing_grid_value(tmp_path: Path):
+    p = tmp_path / "runs.jsonl"
+    _write_runs(p, [
+        {"bench": "t", "status": "ok", "wall_ms": 1.0, "params": {"n": 1, "impl": None}},
+        {"bench": "t", "status": "failed", "wall_ms": 1.0, "params": {"n": 1, "impl": None}},
+    ])
+    row = summarize_runs(p).iloc[0]
+    assert row["ok"] == 1
+    assert row["failed"] == 1
 
 
 def test_preferred_time_column_prefers_reported_then_falls_back():
@@ -261,3 +300,14 @@ def test_metric_column_helpers_derive_their_siblings():
     assert count_column_for("n") is None
     assert spread_columns_for("time_ms_median") == ("time_ms_p10", "time_ms_p90")
     assert spread_columns_for("n") is None
+
+
+def test_metric_wall_ignores_a_reported_marker(tmp_path: Path):
+    p = tmp_path / "runs.jsonl"
+    _write_runs(p, [
+        {"bench": "t", "status": "ok", "wall_ms": 100.0, "reported_ms": 1.0,
+         "metric": "wall", "params": {"n": 1}},
+    ])
+    row = summarize_runs(p).iloc[0]
+    assert row["time_source"] == "wall"
+    assert row["time_ms_median"] == 100.0

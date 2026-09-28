@@ -126,7 +126,8 @@ def run(
     statuses: dict[str, int] = {}
     reasons: dict[tuple[str, str], int] = {}
     measured_ms = 0.0
-    with results_path.open() as handle:
+    retried = 0
+    with results_path.open(encoding="utf-8") as handle:
         handle.seek(initial_size)
         for line in handle:
             try:
@@ -140,6 +141,8 @@ def run(
                 reasons[key] = reasons.get(key, 0) + 1
             if record.get("wall_ms") is not None:
                 measured_ms += float(record["wall_ms"])
+            if status == "ok" and int(record.get("attempts") or 1) > 1:
+                retried += 1
 
     broken = sum(statuses.get(s, 0) for s in _BROKEN_STATUSES)
     tolerated = sum(statuses.get(s, 0) for s in _TOLERATED_STATUSES)
@@ -164,6 +167,10 @@ def run(
         console.print(summary)
         if measured_ms:
             console.print(f"[dim]Total measured command time: {measured_ms / 1000:.2f} s[/dim]")
+        if retried:
+            # Counted as successful, but a benchmark that needs retries to pass
+            # is flaky, and that should not go unnoticed.
+            console.print(f"[yellow]![/yellow] {retried} successful trial(s) needed a retry.")
 
         if reasons:
             console.print()

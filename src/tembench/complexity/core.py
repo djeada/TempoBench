@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import List
 
 import pandas as pd
 
-from .fitting import _bootstrap_exponent_ci, _ols_fit, _upper_bound_offset
+from .fitting import (
+    _bootstrap_exponent_ci,
+    _constant_only_without_outlier,
+    _upper_bound_offset,
+    _upper_bound_scale,
+    _wls_fit,
+)
 from .formatting import _format_formula, _format_model_label
 from .models import _MODEL_ORDER, _basis_functions
 from .quality import assess_fit
@@ -19,8 +26,10 @@ class FitResult:
     """Result of fitting a complexity model to observed data.
 
     The model is: y = C·f(n) + baseline
-    where f(n) is the basis function for the complexity class.
-    The upper-bound curve is shifted up by `offset` so that
+    where f(n) is the basis function for the complexity class.  `fit_models`
+    reports C and baseline already scaled up by the smallest factor that puts
+    the curve over every point, and `offset` covers whatever scaling cannot
+    (points the curve predicts as non-positive), so that
     y_bound = C·f(n) + baseline + offset ≥ y_i for all i.
     """
 
@@ -53,12 +62,18 @@ def fit_models(
     """Fit Big-O complexity models per group.
 
     Algorithm:
-    1. Select the complexity class via outlier-robust constant detection,
-       log-log slope fallback (≤3 points), and step-up OLS with adaptive
-       threshold (≥4 points).
-    2. Fit y = C·f(n) + baseline via OLS for the selected model.
-    3. If C < 0, fall back to a simpler model.
-    4. Shift the curve up by `offset` to form a proper upper bound.
+    1. Select the complexity class (see `selection`): outlier-robust constant
+       detection, log-log slope fallback for very short series, otherwise the
+       lowest AIC of relative-error fits.
+    2. Report y = C·f(n) + baseline from that same relative-error fit, so the
+       curve is sane at small n as well as large.
+    3. If C < 0 (only possible on the short-series path), fall back to a
+       simpler model.
+    4. Scale the curve up (and, where that cannot help, shift it by
+       `offset`) until it sits over every point — a proper upper bound.
+
+    Rows whose size or duration is missing or non-finite are ignored; a group
+    left with fewer than two points is not fitted.
 
     Returns DataFrame: by…, model, display_model, C, baseline, offset, formula,
     rss, nobs, empirical_exponent, exponent_ci_low, exponent_ci_high,
@@ -74,8 +89,16 @@ def fit_models(
     bases = _basis_functions()
 
     for keys, group in df.groupby(by, dropna=False):
-        x = group[x_col].astype(float).tolist()
-        y = group[y_col].astype(float).tolist()
+        # A grid point with no successful trial stays in the summary so its
+        # failure is visible, but it has no duration to fit.  An infinite
+        # reading has none either, and would turn every coefficient into nan
+        # while the quality checks still rated the fit high.
+        xs_raw = pd.to_numeric(group[x_col], errors="coerce").astype(float)
+        ys_raw = pd.to_numeric(group[y_col], errors="coerce").astype(float)
+        finite = xs_raw.map(math.isfinite) & ys_raw.map(math.isfinite)
+        group = group[finite]
+        x = xs_raw[finite].tolist()
+        y = ys_raw[finite].tolist()
 
         if len(x) < 2:
             continue
@@ -100,28 +123,28 @@ def fit_models(
         # Step 1: Select model based on growth pattern
         model, scores = _rank_models(x, y)
 
-        # Step 2: Fit OLS for the selected model
-        C, baseline, rss = _ols_fit(x, y, bases[model])
+        # Step 2: the reported curve comes from the fit the class was scored on
+        C, baseline, _ = _wls_fit(x, y, bases[model])
 
-        # If C is negative, try simpler models
-        if C < 0:
-            idx = _MODEL_ORDER.index(model)
-            while idx > 0 and C < 0:
-                idx -= 1
-                model = _MODEL_ORDER[idx]
-                C, baseline, rss = _ols_fit(x, y, bases[model])
-            if C < 0:
-                model = "O(1)"
-                C = 0.0
-                baseline = max(y)
-                rss = sum((yi - baseline) ** 2 for yi in y)
+        # The scored path never picks a negative C; the short-series slope hint
+        # can.  Walking down always terminates: O(1) fits C = 0.
+        idx = _MODEL_ORDER.index(model)
+        while C < 0 and idx > 0:
+            idx -= 1
+            model = _MODEL_ORDER[idx]
+            C, baseline, _ = _wls_fit(x, y, bases[model])
+        fn = bases[model]
+        rss = sum((yi - (C * fn(xi) + baseline)) ** 2 for xi, yi in zip(x, y))
 
         # Resolved after the negative-coefficient fallback, so the margin always
         # describes the class that is actually being reported.
         rival, margin = runner_up(model, scores)
 
-        # Step 3: Compute upper-bound offset
-        offset = _upper_bound_offset(x, y, bases[model], C, baseline)
+        # Step 3: lift the fitted curve into an upper bound
+        fitted_baseline = baseline
+        scale = _upper_bound_scale(x, y, fn, C, baseline)
+        C, baseline = C * scale, baseline * scale
+        offset = _upper_bound_offset(x, y, fn, C, baseline)
         empirical_exponent, exponent_ci_low, exponent_ci_high = _bootstrap_exponent_ci(
             x, y
         )
@@ -148,6 +171,9 @@ def fit_models(
             exponent_ci_low=exponent_ci_low,
             exponent_ci_high=exponent_ci_high,
             model_margin=margin,
+            model=model,
+            fitted_baseline=fitted_baseline,
+            dropped_outlier=model == "O(1)" and _constant_only_without_outlier(y, x),
             min_samples=min_samples,
             max_relative_spread=max_relative_spread,
         )
@@ -182,7 +208,8 @@ def predict_series(
 
     The curve is y = C·f(n) + baseline + offset, which guarantees the
     fit line sits at or above all measured data points.
-    Interpolates 50 points for smooth rendering.
+    Samples 50 geometrically spaced sizes (linear when the range includes
+    n ≤ 0) plus every observed size, for smooth rendering.
     """
     if df.empty or fits.empty:
         return pd.DataFrame()
@@ -191,7 +218,8 @@ def predict_series(
     x_rows = []
     grouped = df.groupby(by, dropna=False) if by else [((), df)]
     for keys, group in grouped:
-        xs = sorted(pd.unique(group[x_col].astype(float).values))
+        numeric = pd.to_numeric(group[x_col], errors="coerce").astype(float)
+        xs = sorted({v for v in numeric if math.isfinite(v)})
         if not xs:
             continue
         if len(xs) < 2:
@@ -199,8 +227,18 @@ def predict_series(
         else:
             x_min, x_max = xs[0], xs[-1]
             n_interp = 50
-            step = (x_max - x_min) / n_interp
-            smooth_xs = [x_min + i * step for i in range(n_interp + 1)]
+            # Sizes are usually swept geometrically and drawn on a log axis,
+            # where linear steps leave the whole low end as one straight chord.
+            if x_min > 0:
+                ratio = (x_max / x_min) ** (1.0 / n_interp)
+                grid = [x_min * ratio**i for i in range(n_interp)]
+            else:
+                step = (x_max - x_min) / n_interp
+                grid = [x_min + i * step for i in range(n_interp)]
+            # The observed sizes themselves are always sampled: the offset only
+            # guarantees the bound at those points, so a chord between two
+            # samples could otherwise pass beneath a measurement.
+            smooth_xs = sorted(set(grid) | set(xs))
 
         key_values = keys if isinstance(keys, tuple) else (keys,)
         row_key = dict(zip(by, key_values)) if by else {}

@@ -4,9 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import typer
 
-from ...summarize import TIME_SOURCE_COL, read_jsonl, summarize_runs
+from ...summarize import (
+    TIME_SOURCE_COL,
+    grid_columns,
+    preferred_time_column,
+    read_jsonl,
+    summarize_runs,
+)
 from ..app import app, console, fail, print_artifact, print_heading
 
 
@@ -27,7 +34,8 @@ def summarize(
         outliers="included" if include_outliers else "filtered (Tukey fences)",
     )
     df = summarize_runs(runs, include_outliers=include_outliers)
-    if df.empty:
+    time_col = preferred_time_column(df.columns)
+    if df.empty or time_col is None or df[time_col].notna().sum() == 0:
         successes = sum(1 for rec in read_jsonl(runs) if rec.get("status") == "ok")
         if successes:
             raise fail(
@@ -43,6 +51,24 @@ def summarize(
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_csv, index=False)
     console.print(f"[dim]Result[/dim]  {len(df):,} configuration(s), {len(df.columns):,} columns")
+
+    unmeasured = df[df[time_col].isna()]
+    if not unmeasured.empty:
+        keys = grid_columns(df.columns)
+        console.print(
+            f"[yellow]![/yellow] {len(unmeasured)} configuration(s) had no successful "
+            "trial and are kept with empty timings:"
+        )
+        for _, row in unmeasured.head(10).iterrows():
+            point = ", ".join(f"{k}={row[k]}" for k in keys)
+            statuses = ", ".join(
+                f"{int(row[s])} {s}"
+                for s in ("failed", "error", "timeout", "skipped")
+                if s in row and pd.notna(row[s]) and row[s]
+            )
+            console.print(f"    {point}  [dim]{statuses}[/dim]")
+        if len(unmeasured) > 10:
+            console.print(f"    [dim]… and {len(unmeasured) - 10} more[/dim]")
 
     if TIME_SOURCE_COL in df.columns:
         sources = sorted(df[TIME_SOURCE_COL].dropna().unique())

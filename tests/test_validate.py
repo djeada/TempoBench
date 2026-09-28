@@ -174,3 +174,47 @@ def test_bundled_examples_pass_their_own_validation():
         result = runner.invoke(app, ["validate", "--config", str(path), "--no-probe"])
         assert result.exit_code == 0, result.output
         assert "!" not in result.output, f"{name} raises a warning:\n{result.output}"
+
+
+def test_validate_builds_before_probing(tmp_path: Path):
+    """A compiled benchmark's program only exists once its build has run."""
+    built = tmp_path / "built.py"
+    cfg = _config(tmp_path, f"""
+        benchmarks:
+          - name: compiled
+            build: "{sys.executable} -c \\"open(r'{built}', 'w').write('print(1)')\\""
+            cmd: "{sys.executable} {built} {{n}}"
+        grid:
+          n: [1, 2]
+    """)
+    result = runner.invoke(app, ["validate", "--config", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "Config is runnable" in result.output
+
+
+def test_validate_reports_a_failing_build(tmp_path: Path):
+    cfg = _config(tmp_path, """
+        benchmarks:
+          - name: compiled
+            build: "echo 'fatal: missing header' && exit 2"
+            cmd: "echo {n}"
+        grid:
+          n: [1, 2]
+    """)
+    result = runner.invoke(app, ["validate", "--config", str(cfg)])
+    assert result.exit_code == 1, result.output
+    assert "build failed" in result.output
+    assert "missing header" in result.output
+
+
+def test_validate_warns_about_shell_syntax_without_a_shell(tmp_path: Path):
+    cfg = _config(tmp_path, """
+        benchmarks:
+          - name: t
+            cmd: "echo {n} | wc -c"
+        grid:
+          n: [1, 2]
+    """)
+    result = runner.invoke(app, ["validate", "--config", str(cfg), "--no-probe"])
+    if sys.platform != "win32":
+        assert "literal argument" in result.output

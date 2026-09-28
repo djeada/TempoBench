@@ -10,6 +10,7 @@ from typing import Optional
 import typer
 
 from ...complexity import fit_models
+from ...plotting import fit_frame
 from ...reporting import generate_report
 from ...runner.provenance import PROVENANCE_FILENAME
 from ...summarize import (
@@ -47,7 +48,10 @@ def report(
         help="Path to provenance.json describing the machine that ran the benchmark",
     ),
     output: Path = typer.Option(
-        Path("artifacts/report.html"), help="Output path for HTML report"
+        Path("artifacts/report.html"),
+        "--output",
+        "--out-html",
+        help="Output path for HTML report",
     ),
     title: str = typer.Option("TempoBench Report", help="Report title"),
     complexity_strategy: ComplexityStrategy = typer.Option(
@@ -91,11 +95,12 @@ def report(
             # grid that is not called `n`/`impl` still gets a complexity section.
             x_col = infer_x_column(summary_df)
             series = infer_series_column(summary_df, x_col)
-            by = [c for c in ["bench", series] if c and c in summary_df.columns]
             y_fit = preferred_time_column(summary_df.columns)
-            if x_col and by and y_fit:
+            if x_col and y_fit:
+                # Grouped exactly as `plot` groups, so both show the same fits.
+                fit_df, by = fit_frame(summary_df, x_col, series)
                 fitted = fit_models(
-                    summary_df,
+                    fit_df,
                     x_col=x_col,
                     y_col=y_fit,
                     by=by,

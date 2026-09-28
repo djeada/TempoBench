@@ -7,7 +7,7 @@ from typing import Optional
 
 import typer
 
-from ...plotting import plot_heatmap
+from ...plotting import plot_heatmap, save_chart
 from ..app import app, console, load_summary, print_axes, resolve_axes
 
 
@@ -23,7 +23,10 @@ def heatmap(
     y: Optional[str] = typer.Option(None, help="Y axis parameter (default: inferred)"),
     value: str = typer.Option("time_ms_median", help="Value to display in cells"),
     output: Path = typer.Option(
-        Path("artifacts/heatmap.html"), help="Output path for heatmap"
+        Path("artifacts/heatmap.html"),
+        "--output",
+        "--out-html",
+        help="Output path for heatmap",
     ),
 ):
     """Generate a performance heatmap from summary data."""
@@ -34,6 +37,6 @@ def heatmap(
     chart = plot_heatmap(summary, x=x, y=y, value=value)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    chart.save(output)
+    save_chart(chart, output)
 
     console.print(f"[green]✓[/green] Heatmap saved to [bold]{output}[/bold]")

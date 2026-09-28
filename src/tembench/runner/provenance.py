@@ -49,13 +49,13 @@ def write_provenance(
                 history = []
             prov["previous"] = [*history, earlier]
 
-    path.write_text(json.dumps(prov, indent=2))
+    path.write_text(json.dumps(prov, indent=2), encoding="utf-8")
 
 
 def read_provenance(path: Path) -> dict | None:
     """Load a provenance snapshot, or None when it is absent or unreadable."""
     try:
-        data = json.loads(Path(path).read_text())
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None

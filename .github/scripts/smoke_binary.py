@@ -41,6 +41,13 @@ WORK = Path("smoke")
 DIAGNOSTICS = Path("smoke-diagnostics.txt")
 
 
+# The binary's output is pinned to UTF-8 (see `_env`), but this script's own
+# stdout still uses the runner's legacy code page on Windows, so echoing Rich's
+# box-drawing characters crashed the smoke test even when the binary had passed.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
 def _log(text: str = "") -> None:
     print(text, flush=True)
     with DIAGNOSTICS.open("a", encoding="utf-8") as fh:
