@@ -7,7 +7,7 @@ from typing import Optional
 
 import typer
 
-from ...plotting import plot_memory
+from ...plotting import plot_memory, save_chart
 from ..app import app, console, load_summary, print_axes, resolve_axes
 
 
@@ -24,7 +24,10 @@ def memory(
         None, help="Series grouping column (default: inferred)"
     ),
     output: Path = typer.Option(
-        Path("artifacts/memory.html"), help="Output path for memory chart"
+        Path("artifacts/memory.html"),
+        "--output",
+        "--out-html",
+        help="Output path for memory chart",
     ),
     log_x: bool = typer.Option(False, help="Use log scale for X axis"),
     log_y: bool = typer.Option(False, help="Use log scale for Y axis"),
@@ -37,6 +40,6 @@ def memory(
     chart = plot_memory(summary, x=x, color=color, log_x=log_x, log_y=log_y)
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    chart.save(output)
+    save_chart(chart, output)
 
     console.print(f"[green]✓[/green] Memory chart saved to [bold]{output}[/bold]")

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
 from ..config import Config
-from .grid import _run_grid_point, format_cmd
+from .grid import _run_grid_point, error_records, skipped_record
 from .process import build_once
 from .result import TrialResult
 
@@ -51,9 +50,23 @@ def _run_serial(
     """Original sequential execution path — preserves pruning behaviour."""
     mode = "a" if append else "w"
     reps = max(1, cfg.limits.repeats)
-    with out_path.open(mode) as f:
+    metric = cfg.limits.metric
+    with out_path.open(mode, encoding="utf-8") as f:
+
+        def emit(bench_name: str, params: dict[str, object], results: list[TrialResult]):
+            for i, rec in enumerate(results):
+                f.write(json.dumps(rec.to_dict()) + "\n")
+                f.flush()
+                if on_trial:
+                    on_trial(bench_name, params, i + 1, reps, rec)
+
         for bench in cfg.benchmarks:
-            build_once(bench)
+            build_error = build_once(bench)
+            if build_error:
+                for params in points:
+                    emit(bench.name, params, error_records(bench, params, reps, build_error, metric))
+                continue
+
             timed_out_by_series: dict[tuple, set] = {}
             for params in points:
                 gk = cfg.limits.growth_key
@@ -66,18 +79,11 @@ def _run_serial(
                     and key_val is not None
                     and _should_prune_key(timed_out_keys, key_val)
                 ):
-                    skip_rec = TrialResult(
-                        ts=datetime.now(timezone.utc).isoformat(),
-                        status="skipped",
-                        bench=bench.name,
-                        cmd=format_cmd(bench.cmd, params),
-                        params=dict(params),
+                    emit(
+                        bench.name,
+                        params,
+                        [skipped_record(bench, params, metric) for _ in range(reps)],
                     )
-                    f.write(json.dumps(skip_rec.to_dict()) + "\n")
-                    f.flush()
-                    if on_trial:
-                        for rep in range(reps):
-                            on_trial(bench.name, params, rep + 1, reps, skip_rec)
                     continue
 
                 results = _run_grid_point(
@@ -88,17 +94,14 @@ def _run_serial(
                     cfg.limits.repeats,
                     retries,
                     poll_interval_sec,
-                    cfg.limits.metric,
+                    metric,
+                    prune_on_timeout=cfg.limits.prune_on_timeout,
                 )
-                for i, rec in enumerate(results):
-                    f.write(json.dumps(rec.to_dict()) + "\n")
-                    f.flush()
-                    if on_trial:
-                        on_trial(bench.name, params, i + 1, reps, rec)
-                    if (
-                        rec["status"] == "timeout"
-                        and cfg.limits.prune_on_timeout
-                        and gk
-                        and key_val is not None
-                    ):
-                        timed_out_keys.add(key_val)
+                emit(bench.name, params, results)
+                if (
+                    cfg.limits.prune_on_timeout
+                    and gk
+                    and key_val is not None
+                    and any(rec.status == "timeout" for rec in results)
+                ):
+                    timed_out_keys.add(key_val)

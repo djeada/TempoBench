@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import html
+import math
+
 import pandas as pd
 
 # ---------------------------------------------------------------------------
@@ -10,6 +13,7 @@ import pandas as pd
 
 _COL_LABELS = {
     "bench": "Benchmark",
+    "_series": "Series",
     "impl": "Impl",
     "n": "n",
     "time_ms_median": "Time Med (ms)",
@@ -49,19 +53,39 @@ def _col_label(col: str) -> str:
     return _COL_LABELS.get(col, col)
 
 
+def format_number(val: float, digits: int = 3) -> str:
+    """Round `val` to `digits` significant figures in plain notation.
+
+    Benchmarks span microseconds to minutes: fixed decimals turn a 0.0019 ms
+    timing into "0.0" and scientific notation makes a column hard to scan, so
+    only magnitudes too small to write plainly fall back to an exponent.
+    """
+    if not math.isfinite(val):
+        return str(val)
+    if val == 0:
+        return "0"
+    magnitude = abs(val)
+    if magnitude >= 10**digits:
+        return f"{val:,.0f}"
+    if magnitude < 1e-4:
+        return f"{val:.{digits - 1}e}"
+    decimals = digits - 1 - math.floor(math.log10(magnitude))
+    return f"{val:,.{max(decimals, 0)}f}"
+
+
 def _fmt_val(val, col: str) -> str:
-    """Format a cell value depending on its type and column name."""
+    """Format a cell value as escaped HTML, by its type and column name."""
     if pd.isna(val):
         return '<span class="na">—</span>'
     if isinstance(val, float):
         if "pct" in col:
             return f"{val:.1f}%"
-        if abs(val) >= 100:
-            return f"{val:,.1f}"
-        if abs(val) >= 1:
-            return f"{val:.3f}"
-        return f"{val:.3e}"
-    return str(val)
+        # A count column turns float once a failed grid point leaves it empty.
+        if val.is_integer() and abs(val) < 1e15:
+            return f"{int(val):,}"
+        return format_number(val)
+    # Cell text comes from user-defined grid values and command output.
+    return html.escape(str(val))
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +103,7 @@ def _table_html(
     h = [f'<div class="table-wrap"><table class="{cls}">']
     h.append("<thead><tr>")
     for col in df.columns:
-        h.append(f"<th>{_col_label(col)}</th>")
+        h.append(f"<th>{html.escape(_col_label(str(col)))}</th>")
     h.append("</tr></thead><tbody>")
 
     for _, row in df.iterrows():
@@ -97,5 +121,6 @@ def _table_html(
 
 
 def _stat_card(value: str, label: str, variant: str = "") -> str:
+    """Stat tile; `value` and `label` are inserted as HTML, so escape user text."""
     cls = f"stat-card {variant}".strip()
     return f'<div class="{cls}"><div class="stat-value">{value}</div><div class="stat-label">{label}</div></div>'

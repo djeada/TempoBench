@@ -1,5 +1,6 @@
 """Plotting helpers for runtime, memory, dashboards, and comparisons."""
 
+from ._common import fit_frame, series_columns
 from .comparison import plot_comparison
 from .dashboard import create_dashboard
 from .distribution import plot_boxplot
@@ -15,4 +16,6 @@ __all__ = [
     "plot_comparison",
     "create_dashboard",
     "save_chart",
+    "fit_frame",
+    "series_columns",
 ]

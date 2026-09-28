@@ -126,7 +126,7 @@ def test_an_undecided_class_is_flagged_and_names_its_rival():
         model_margin=0.4,
     )
     assert "ambiguous-class" in quality.notes
-    assert "about as well" in quality.summary
+    assert "another class" in quality.summary
 
 
 def test_a_decisive_margin_adds_no_caveat():

@@ -1,6 +1,6 @@
 # TempoBench
 
-A language-agnostic benchmarking CLI that runs any shell command with parameter sweeps, records timing and memory, estimates Big-O complexity with an honest confidence rating, and generates reports, all from a single YAML config.
+A language-agnostic benchmarking CLI that runs any command with parameter sweeps, records timing and memory, estimates Big-O complexity with an honest confidence rating, and generates reports, all from a single YAML config.
 
 <img width="1206" height="795" alt="Screenshot from 2026-02-12 21-53-22" src="https://github.com/user-attachments/assets/26c75949-de62-482d-8cfd-3d27db35eb95" />
 
@@ -13,9 +13,9 @@ A language-agnostic benchmarking CLI that runs any shell command with parameter 
 - **Complexity estimation** — observed runtimes are fitted against O(1) … O(n² 2ⁿ) models using a multi-layer algorithm (outlier-robust constant detection, log-log slope fallback, step-up OLS with adaptive thresholds, and tail-ratio guards). The best model is selected and overlaid on plots.
 - **Fit confidence** — every fitted class is reported with a confidence rating and the caveats behind it, so a class the measurements cannot support is never presented as though they did.
 - **CI-ready exit codes** — a run in which trials failed, or a summary with nothing in it, exits non-zero instead of reporting success.
-- **Interactive charts** — Vega-Lite charts with click-to-toggle legend, crosshair tooltips, and smooth fit curves. Data points shown as discrete markers, fit lines as smooth interpolated curves.
+- **Interactive charts** — Vega-Lite charts with click-to-toggle legend, crosshair tooltips, and smooth fit curves. Data points shown as discrete markers, fit lines as smooth interpolated curves. Every grid axis besides the input size gets its own series, and grid points where no trial succeeded (or values a log axis cannot show) are left out with a note on the chart rather than drawn as zero.
 - **Rich CLI output** — live progress bars, colored status tables, and system-info display powered by [Rich](https://github.com/Textualize/rich).
-- **Reports & dashboards** — single-file HTML reports with heatmaps, comparison views, and regression detection. Chart data and styling are embedded; the Vega renderer loads from a CDN, so drawing charts needs network access.
+- **Reports & dashboards** — a single-file HTML report with summary statistics, trial status counts, the runtime chart, the results table, the grid points that produced no measurement, complexity fits, and system information; a dashboard combining the runtime, memory, heatmap and per-size distribution charts; and a separate comparison report from `compare`. Chart data and styling are embedded; the Vega renderer loads from a CDN, so drawing charts needs network access.
 - **Baseline comparison** — flag regressions against a previous run above a configurable threshold. Rows match on whatever grid columns the two summaries share, so any sweep works.
 - **Reproducibility** — a provenance snapshot records the seed, invocation, and the CPU/memory of the machine that ran the benchmark. Reports read it back, so a report built on your laptop still describes the CI runner that produced the numbers.
 
@@ -60,9 +60,10 @@ limits:
 ```
 
 > The measurement protocol matters as much as the fitting. On this very
-> benchmark, dropping to `warmups: 0, repeats: 2` makes both implementations
-> come out **O(n²)** — cold allocator state inflates the small inputs and tilts
-> the whole curve. `tembench validate` warns about a protocol that thin.
+> benchmark, dropping to `warmups: 0, repeats: 2` leaves too few samples to
+> filter outliers or trust a median, and every fit comes back rated **low**
+> confidence. `tembench validate` warns about a protocol that thin before you
+> spend time on it.
 
 **2. Check it before committing to a full sweep:**
 
@@ -110,7 +111,7 @@ tembench report --summary artifacts/summary.csv
 | `heatmap`     | Generate a performance heatmap                             |
 | `sysinfo`     | Display system information for reproducibility             |
 
-Run `tembench --help` or `tembench <command> --help` for full option details.
+Run `tembench --help` or `tembench <command> --help` for full option details. Every chart and report command takes its output path as `--out-html` (`--output` also works for `report`, `dashboard`, `memory` and `heatmap`).
 
 ### Arbitrary grids
 
@@ -143,12 +144,13 @@ overhead is a **constant added to every reading**, and a constant is exactly
 what destroys a complexity estimate — it flattens the curve most at small `n`,
 where the signal is weakest.
 
-Concretely: `examples/unique_impl.py` swept over `n = 50k … 800k`, where ~90 ms
-of Python startup sits on top of every reading. Fitted on the wall-clock column
-of that run, both `sort_scan` and `hash_set` come out **O(n)**. Fitted on the
-self-reported column of *the same trials*, they separate correctly into
-**O(n log n)** and **O(n)**. At smaller `n`, where startup is proportionally
-larger still, wall clock degrades further — to **O(log n)** and **O(1)**.
+Concretely: sweeping `examples/unique_impl.py` over `n = 50k … 800k`, the
+self-reported timings of `sort_scan` and `hash_set` grow with measured exponents
+of about 1.15. The wall-clock column of *the same trials* grows with exponents
+of only 0.7–0.8, because ~25 ms of Python startup sits on top of every reading
+and takes up a large share of the small ones. That is enough to move `hash_set`
+from O(n log n) to O(n), and the smaller the inputs, the flatter wall clock
+makes the curve.
 
 To measure the work, have the command time its own hot section and print one
 line on stdout:
@@ -186,11 +188,15 @@ measurements behind it, so every fit is reported with a confidence rating and
 the reasons for it, in `fits.csv` (`confidence`, `confidence_notes`), in the
 terminal, in chart tooltips, and in the HTML report.
 
-When a rival class fits nearly as well, `fits.csv` names it in `runner_up` and
-records the gap in `model_margin`, and the terminal prints the pair as
-`O(n log n) ≈ O(n²)`. On clean data the margin runs into the hundreds; on a
-short, noisy sweep it collapses, and saying so is more useful than picking one
-of the two and sounding certain.
+`fits.csv` names the best rival class in `runner_up` and records how far
+behind it scored in `model_margin` — an ordinary ΔAIC, computed from the
+relative residuals of each class's fit. When the rival is within 6 the terminal
+prints the pair as `O(n log n) ≈ O(n²)`. Clean data decides by tens to a
+couple of hundred (relative errors below 0.01% count as timer resolution, which
+caps it); on a short, noisy sweep the margin collapses, and saying so is more
+useful than picking one of the two and sounding certain. The margin is slightly negative
+only when the tail check (see [Complexity Fitting](#complexity-fitting)) chose a
+simpler class the score could not separate from the winner.
 
 A fit is downgraded once per caveat that applies — one caveat gives `medium`,
 two or more give `low`:
@@ -202,12 +208,18 @@ two or more give `low`:
 | `flat-signal`        | Durations span less than 2× — nothing grew enough to fit.  |
 | `wide-exponent-ci`   | The bootstrap exponent interval is wider than 0.5.         |
 | `overhead-dominated` | Over 50% of the largest reading is constant overhead.      |
-| `ambiguous-class`    | Another class explains the data about as well (ΔAIC < 2).  |
+| `ambiguous-class`    | Another class fits almost as well (ΔAIC < 6). The textbook 2 is too lenient for a seven-way contest on a handful of points. |
+| `exponent-mismatch`  | The bootstrap exponent interval lies outside the range the class produces, and fitted overhead cannot explain it — typically cache effects bending the curve between two classes. |
+| `single-point-growth`| The series is flat except for the largest input size — one reading decides the class. |
+| `outlier-dropped`    | `O(1)` only after discarding one outlying reading (never the largest input). |
+| `non-positive-timings` | Some durations are zero or negative — below timer resolution; they are left out of the exponent estimate. |
 | `thin-samples`       | Fewer than 3 trials per input size.                        |
 | `unstable-timings`   | Repeated trials of one point disagree by over 50% of its median — usually a busy machine. |
 
 Confidence is advisory: it never changes the fitted bound, only how much you
-should trust the label on it. Note that an `O(1)` result is never rated `high` —
+should trust the label on it. Rows with a missing or non-finite size or duration
+are ignored, and a series left with fewer than two points is not fitted. Note
+that an `O(1)` result is never rated `high` —
 a flat curve is also what a sweep that never reached interesting input sizes
 looks like, and the two cannot be told apart from the data.
 
@@ -250,9 +262,17 @@ empty artifacts:
 | `summarize` found no successful trials      | 1    | —                  |
 | A chart or report was asked for empty data  | 1    | —                  |
 | `compare` detected a regression             | 1    | —                  |
+| `compare`: a point the baseline measured has no timing now (all trials failed, or it is missing) | 1 | — |
 
 A failing run prints each distinct failure with the command's own last message,
 rather than only a count.
+
+`summarize` keeps a row for every grid point that was attempted, including one
+where every trial failed or timed out; its timing columns are empty and its
+status counts say why. `compare` treats such a row as a regression when the
+baseline measured it. When one summary's timing is self-reported and the
+other's is wall clock for the same point, `compare` judges that point on wall
+clock, since the difference between the two is process startup.
 
 ## Parallel Execution
 
@@ -274,8 +294,9 @@ limits:
 > publication-quality measurements; use `-j N` for rapid iteration and CI.
 
 In sequential mode, `prune_on_timeout` and `pin_cpu` work as expected.
-In parallel mode, CPU pinning is disabled and pruning is not applied (grid
-points are dispatched independently).
+In parallel mode, CPU pinning is disabled, and pruning only skips the remaining
+repeats of the grid point that timed out: larger inputs are not pruned, since
+grid points are dispatched independently.
 
 ## Artifacts
 
@@ -283,7 +304,7 @@ All output is written to the `--out-dir` directory (default `artifacts/`):
 
 | File              | Format | Contents                                      |
 |-------------------|--------|-----------------------------------------------|
-| `runs.jsonl`      | JSONL  | One JSON object per trial (status, wall_ms, reported_ms, peak_rss_mb, stdout, stderr) |
+| `runs.jsonl`      | JSONL  | One JSON object per trial (status, wall_ms, reported_ms, peak_rss_mb, metric, stdout/stderr tails; attempts when retried) |
 | `provenance.json` | JSON   | Seed, worker count, CLI invocation, working directory, and the benchmark machine's platform/CPU/memory |
 | `summary.csv`     | CSV    | Median/mean/p10/p90 per grid point, for both the canonical (`time_ms_*`) and wall-clock (`wall_ms_*`) durations |
 | `runtime.html`    | HTML   | Vega-Lite runtime chart with complexity overlay |
@@ -294,15 +315,25 @@ All output is written to the `--out-dir` directory (default `artifacts/`):
 
 Candidate models: **O(1)**, **O(log n)**, **O(√n)**, **O(n)**, **O(n log n)**, **O(n²)**, **O(n³)**, **O(n² 2ⁿ)**.
 
-The fitting algorithm uses a multi-layer approach:
+Every class is fitted as `T(n) = C·f(n) + baseline`:
 
-1. **Constant detection** — outlier-robust CV test; if data (or data minus any single outlier) has CV < 8%, classify as O(1).
-2. **Log-log slope fallback** — for ≤ 3 data points with low dynamic range, where OLS lacks degrees of freedom.
-3. **Step-up OLS** — fit all models via OLS (`y = C·f(n) + baseline`), start from the simplest valid model, accept more complex only if RSS improves by a dynamic-range-dependent factor.
-4. **Tail-ratio guard** — for O(n) vs O(n log n) disambiguation, verify using the growth ratio at the two largest measured n values.
+1. **Constant detection** — the series is `O(1)` when max/min stays within 1.15×,
+   or within 1.5× with no monotone trend; one outlying reading may be discarded
+   for this test, but never the one at the largest input size.
+2. **Log-log slope fallback** — two points, or three spanning less than 5× in
+   duration, cannot support a model comparison; the empirical exponent picks
+   the class.
+3. **Relative-error fits** — otherwise every class is fitted by least squares on
+   *relative* error (weights 1/y²), so a sweep spanning several decades is fitted
+   at its small sizes as well as its large ones, and ranked by the AIC of those
+   same residuals. Lowest AIC wins.
+4. **Tail check** — among classes within ΔAIC 2 of the winner, which the data
+   cannot tell apart, step down to the simpler one when the growth between the
+   two largest sizes, net of the fitted baseline, is closer to it. A class the
+   data clearly rejects is never chosen.
 5. **Confidence assessment** — rate how well the measurements support the chosen class; see [Fit Confidence](#fit-confidence).
 
-The selected model is shifted up to form a proper **upper bound** — the fit line sits at or above every observed data point, as Big-O semantics require. The plot shows the Big-O class (e.g. `O(n log n)`) on the curve, and the legend shows the concrete bound formula (e.g. `T(n) ≤ 5.36e-05·n·log(n) + 55.7`). Use `--complexity-strategy strict` to surface an empirical exponent band like `O(n^1.08±0.07)` when the confidence interval overlaps a neighboring class boundary.
+The selected fit is scaled up by the smallest factor that makes it a proper **upper bound** — the fit line sits at or above every observed data point, as Big-O semantics require, while staying as tight at small n as at large. The plot shows the Big-O class (e.g. `O(n log n)`) on the curve, and the chart subtitle lists the concrete bound formula of each series (e.g. `T(n) ≤ 5.36e-05·n·log(n) + 55.7`), which is also in the curve's tooltip. Use `--complexity-strategy strict` to surface an empirical exponent band like `O(n^1.08±0.07)` when the confidence interval overlaps a neighboring class boundary.
 
 ```bash
 tembench plot --summary artifacts/summary.csv --export-fits artifacts/fits.csv
@@ -321,7 +352,9 @@ benchmarks:
   - name: my_benchmark          # identifier for this benchmark
     cmd: "my_program --size {n}" # command template; {keys} are expanded from grid
                                  # {python} is built in: this interpreter's path
-    build: "make release"        # optional build step run once before trials
+    build: "make release"        # optional build step, run through the shell once
+                                 # before trials; if it fails, that benchmark's
+                                 # trials are recorded as errors and the run exits 1
     workdir: "."                 # optional working directory
     env: { MY_VAR: "1" }        # optional environment variables
 
@@ -329,19 +362,49 @@ grid:
   n: [100, 1000, 10000]         # parameter grid; all combinations are swept
 
 limits:
-  timeout_sec: 30               # per-trial timeout (soft SIGTERM, then SIGKILL)
+  timeout_sec: 30               # per-trial timeout (SIGTERM to the process
+                                # group, then SIGKILL)
   warmups: 1                    # discarded warm-up runs per grid point
   repeats: 3                    # measured repetitions per grid point
-  rss_poll_interval_sec: 0.01   # RSS sampling cadence for peak-memory tracking
+  rss_poll_interval_sec: 0.01   # RSS sampling cadence; does not affect timing
   workers: 1                    # parallel workers (1 = sequential, default)
-  prune_on_timeout: false       # after a timeout, skip larger growth_key values
-                                # for that series only (other grid axes unaffected)
+  prune_on_timeout: false       # after a timeout, skip that point's remaining
+                                # repeats and larger growth_key values for that
+                                # series only (other grid axes unaffected)
   shuffle: true                 # randomize sweep order to reduce drift
   growth_key: "n"               # grid key treated as the input size
   metric: auto                  # auto | wall | reported — see "Measuring the work"
 
 pin_cpu: 0                      # optional CPU affinity (Linux, sequential only)
 ```
+
+### Commands
+
+`cmd` is split into arguments and run directly, **without a shell**, so pipes,
+redirects, `&&` and `$VARS` are passed to the program as literal text. Each
+grid value is substituted as exactly one argument, quoted as needed, so
+`"two words"` or `"it's"` arrive intact. Format specs still apply (`{n:06d}`),
+and `{key:raw}` inserts a value verbatim, for a grid axis that holds whole
+command lines.
+
+When a benchmark does need a shell, run one explicitly and pass grid values as
+positional arguments, which is safe for any value:
+
+```yaml
+cmd: "sh -c 'seq \"$1\" | sort -n > /dev/null' sh {n}"
+```
+
+`--retries N` re-runs a failed repetition up to N more times. Only the final
+attempt is recorded (with an `attempts` count), so a flaky trial that
+eventually passes counts as successful; the run summary notes how many needed
+a retry. Processes a benchmark leaves running in the background are killed
+when it exits (POSIX).
+
+Peak memory is the child's own high-water mark as the OS tracks it (so a
+brief spike between samples is not missed) plus, for commands that spawn
+several processes, a sample of the whole tree every 0.1 s that counts pages
+shared between processes once. A trial with no reading at all has no
+`peak_rss_mb` rather than `0`.
 
 ## License
 

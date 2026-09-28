@@ -23,7 +23,10 @@ def compare(
     ),
     threshold: float = typer.Option(5.0, help="Regression threshold percentage"),
     output: Path = typer.Option(
-        Path("artifacts/comparison.html"), help="Output path for comparison report"
+        Path("artifacts/comparison.html"),
+        "--output",
+        "--out-html",
+        help="Output path for comparison report",
     ),
     output_csv: Optional[Path] = typer.Option(
         None, help="Optional path to save comparison CSV"
@@ -57,6 +60,20 @@ def compare(
         f"[dim]Improved[/dim] {tally['improvements']}  "
         f"[dim]Regressed[/dim] {total_regressions}"
     )
+    if tally["unmeasured"]:
+        keys = [
+            c for c in comparison_df.columns
+            if c not in ("problem", "compared_on") and not c.endswith(
+                ("_current", "_baseline", "_delta", "_delta_pct", "_regression")
+            )
+        ]
+        console.print(
+            f"[red]✗[/red] {tally['unmeasured']} configuration(s) the baseline measured "
+            "could not be checked (counted as regressions):"
+        )
+        for _, row in comparison_df[comparison_df["problem"] != ""].head(10).iterrows():
+            point = ", ".join(f"{k}={row[k]}" for k in keys)
+            console.print(f"    {point}  [dim]{row['problem']}[/dim]")
 
     generate_comparison_report(
         comparison_df=comparison_df,

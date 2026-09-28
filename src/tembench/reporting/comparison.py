@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import html
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
 from .. import PROJECT_URL
-from ..summarize import TIME_COLUMN_PREFERENCE, grid_columns
+from ..summarize import TIME_COLUMN_PREFERENCE, TIME_SOURCE_COL, grid_columns
 from ..system import get_system_info
 from .formatting import _col_label, _stat_card
 from .resources import render_head_assets, render_theme_toggle
@@ -25,6 +26,13 @@ def _key_columns(current: pd.DataFrame, baseline: pd.DataFrame) -> list[str]:
     return grid_columns(shared)
 
 
+#: Why a row's verdict could not come from its timings.  Each one fails the
+#: comparison: CI must not pass a grid point it could not actually check.
+MISSING_CURRENT = "missing in current"
+NO_TIMING = "no successful trial"
+SOURCE_CHANGED = "timing source changed"
+
+
 def compare_summaries(
     current_csv: Path,
     baseline_csv: Path,
@@ -39,7 +47,11 @@ def compare_summaries(
         return pd.DataFrame()
 
     merged = current.merge(
-        baseline, on=group_cols, suffixes=("_current", "_baseline"), how="outer"
+        baseline,
+        on=group_cols,
+        suffixes=("_current", "_baseline"),
+        how="outer",
+        indicator=True,
     )
     result_cols = list(group_cols)
 
@@ -52,18 +64,59 @@ def compare_summaries(
         for m in TIME_COLUMN_PREFERENCE
         if f"{m}_current" in merged.columns and f"{m}_baseline" in merged.columns
     ]
-    decisive = comparable[0] if comparable else None
+    if not comparable:
+        return pd.DataFrame()
+    decisive = comparable[0]
+
+    # A row whose canonical duration came from different sources on the two
+    # sides (one self-reported, one wall clock) cannot be compared on it: the
+    # gap would be process startup, not a change in the code.  Such rows fall
+    # back to wall clock, which both sides always have.
+    source_cols = (f"{TIME_SOURCE_COL}_current", f"{TIME_SOURCE_COL}_baseline")
+    switched = pd.Series(False, index=merged.index)
+    if all(c in merged.columns for c in source_cols):
+        switched = (
+            merged[source_cols[0]].notna()
+            & merged[source_cols[1]].notna()
+            & (merged[source_cols[0]] != merged[source_cols[1]])
+        )
 
     for metric in comparable:
         curr_col, base_col = f"{metric}_current", f"{metric}_baseline"
-        merged[f"{metric}_delta"] = merged[curr_col] - merged[base_col]
-        merged[f"{metric}_delta_pct"] = (
-            (merged[curr_col] - merged[base_col]) / merged[base_col] * 100
-        ).round(2)
+        delta = merged[curr_col] - merged[base_col]
+        delta_pct = (delta / merged[base_col] * 100).round(2)
+        if metric == decisive and metric.startswith("time_ms"):
+            delta = delta.mask(switched)
+            delta_pct = delta_pct.mask(switched)
+        merged[f"{metric}_delta"] = delta
+        merged[f"{metric}_delta_pct"] = delta_pct
         result_cols.extend([curr_col, base_col, f"{metric}_delta", f"{metric}_delta_pct"])
-        if metric == decisive:
-            merged[f"{metric}_regression"] = merged[f"{metric}_delta_pct"] > threshold_pct
-            result_cols.append(f"{metric}_regression")
+
+    verdict_pct = merged[f"{decisive}_delta_pct"]
+    wall_pct = "wall_ms_median_delta_pct"
+    if switched.any() and wall_pct in merged.columns:
+        verdict_pct = verdict_pct.where(~switched, merged[wall_pct])
+        merged["compared_on"] = decisive.rsplit("_", 1)[0]
+        merged.loc[switched, "compared_on"] = "wall_ms"
+        result_cols.append("compared_on")
+
+    # A grid point the baseline measured but the current run did not is a
+    # failure, not a pass: NaN > threshold is False, so without this a point
+    # that stopped working entirely would sail through.  A point the baseline
+    # never measured has nothing to regress against.
+    measured_before = merged[f"{decisive}_baseline"].notna()
+    problem = pd.Series("", index=merged.index)
+    problem[merged["_merge"] == "right_only"] = MISSING_CURRENT
+    problem[(merged["_merge"] == "both") & merged[f"{decisive}_current"].isna()] = NO_TIMING
+    if "compared_on" not in merged.columns:
+        # The timing source switched and there is no wall clock to fall back on.
+        problem[switched & (problem == "")] = SOURCE_CHANGED
+    problem[~measured_before] = ""
+    merged["problem"] = problem
+    merged[f"{decisive}_regression"] = measured_before & (
+        (verdict_pct > threshold_pct) | (problem != "")
+    )
+    result_cols.extend([f"{decisive}_regression", "problem"])
 
     for metric in ["peak_rss_mb_median", "peak_rss_mb_mean"]:
         curr_col, base_col = f"{metric}_current", f"{metric}_baseline"
@@ -77,7 +130,7 @@ def compare_summaries(
             )
 
     result_cols = [c for c in result_cols if c in merged.columns]
-    return merged[result_cols]
+    return merged[result_cols].reset_index(drop=True)
 
 
 def comparison_tally(comparison_df: pd.DataFrame, threshold_pct: float) -> dict[str, int]:
@@ -92,13 +145,26 @@ def comparison_tally(comparison_df: pd.DataFrame, threshold_pct: float) -> dict[
         (c.replace("_regression", "_delta_pct") for c in regression_cols), None
     )
     improvements = 0
+    compared = len(comparison_df)
     if decisive_delta and decisive_delta in comparison_df.columns:
-        improvements = int((comparison_df[decisive_delta] < -threshold_pct).sum())
+        verdict = comparison_df[decisive_delta]
+        if "compared_on" in comparison_df.columns and "wall_ms_median_delta_pct" in comparison_df.columns:
+            verdict = verdict.where(
+                comparison_df["compared_on"] != "wall_ms",
+                comparison_df["wall_ms_median_delta_pct"],
+            )
+        improvements = int((verdict < -threshold_pct).sum())
+        # Rows present on one side only were matched against nothing.
+        compared = int(verdict.notna().sum())
+    problems = 0
+    if "problem" in comparison_df.columns:
+        problems = int((comparison_df["problem"].fillna("") != "").sum())
 
     return {
-        "compared": len(comparison_df),
+        "compared": compared,
         "regressions": int(sum(comparison_df[c].sum() for c in regression_cols)),
         "improvements": improvements,
+        "unmeasured": problems,
     }
 
 
@@ -119,7 +185,7 @@ def generate_comparison_report(
     tbl = ['<div class="table-wrap"><table class="data-table">']
     tbl.append("<thead><tr>")
     for col in comparison_df.columns:
-        tbl.append(f"<th>{_col_label(col)}</th>")
+        tbl.append(f"<th>{html.escape(_col_label(col))}</th>")
     tbl.append("</tr></thead><tbody>")
 
     for _, row in comparison_df.iterrows():
@@ -143,8 +209,8 @@ def generate_comparison_report(
                 else:
                     val = f"{val:.1f}%"
             elif isinstance(val, float):
-                val = f"{val:.3f}"
-            tbl.append(f"<td{css}>{val}</td>")
+                val = "—" if pd.isna(val) else f"{val:.3f}"
+            tbl.append(f"<td{css}>{html.escape(str(val))}</td>")
         tbl.append("</tr>")
     tbl.append("</tbody></table></div>")
     table_html = "\n".join(tbl)
@@ -159,19 +225,19 @@ def generate_comparison_report(
     head_assets = render_head_assets()
     theme_toggle_html = render_theme_toggle()
 
-    html = f"""<!DOCTYPE html>
+    page = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{title}</title>
+  <title>{html.escape(title)}</title>
 {head_assets}
 </head>
 <body>
   <div class="container">
 
     <div class="report-header" style="background:linear-gradient(135deg,#7c3aed,#5b21b6)">
-      <h1>{title}</h1>
+      <h1>{html.escape(title)}</h1>
       <div class="meta">Regression threshold: {threshold_pct}%</div>
     </div>
 
@@ -207,6 +273,6 @@ def generate_comparison_report(
 
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(html)
+        output_path.write_text(page, encoding="utf-8")
 
-    return html
+    return page

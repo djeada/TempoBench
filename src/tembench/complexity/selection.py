@@ -1,16 +1,15 @@
 """Big-O model selection.
 
-The selector now uses a scale-free workflow:
 1. Sort data by input size and rule out effectively-constant series.
 2. For <= 2 points, or for 3 points with low dynamic range, fall back to the
    empirical log-log slope because richer model comparison is underdetermined.
-3. For larger series, fit every non-constant candidate in linear space, but
-   compare them via log-space AIC-like scores so the largest-n point does not
-   dominate purely by magnitude.
-4. Apply a tail-ratio step-down guard between adjacent model pairs. This only
-   overrides the log-AIC winner when the tail looks closer to the simpler
-   class and that simpler class is either statistically competitive or matches
-   the empirical slope hint.
+3. For larger series, fit every non-constant candidate by relative-error least
+   squares and rank them by the AIC of those same residuals, so the fit and the
+   score agree on what a good curve is.
+4. Among classes within `_STEP_DOWN_AIC_TOL` of the winner — ones the data
+   cannot tell apart — step down to the simpler class when the growth between
+   the two largest inputs, net of the fitted overhead, is closer to it.  A class
+   the data clearly rejects is never chosen.
 """
 
 from __future__ import annotations
@@ -21,9 +20,10 @@ from typing import Sequence
 from .fitting import (
     _is_effectively_constant,
     _log_log_slope,
-    _log_space_aic,
+    _model_score,
     _slope_to_model,
     _tail_ratio_favors_simpler,
+    _wls_fit,
 )
 from .models import _MODEL_ORDER, _basis_functions
 
@@ -34,10 +34,10 @@ _STEP_DOWN_AIC_TOL = 2.0
 def runner_up(selected: str, scores: dict[str, float]) -> tuple[str | None, float]:
     """Return the best rival class and how far behind the winner it scored.
 
-    The margin is ``rival_score - selected_score`` on the log-AIC scale, so it
-    is positive when the selected class really did score best.  It goes negative
-    when the tail-ratio guard stepped the choice down to a simpler class that
-    the raw score did not favour — a case worth surfacing rather than hiding.
+    The margin is ``rival_score - selected_score`` in AIC units, so it is
+    positive when the selected class really did score best.  It goes negative —
+    by less than `_STEP_DOWN_AIC_TOL` — when the tail check preferred a simpler
+    class the score could not separate from the winner.
     Returns ``(None, inf)`` when there was nothing to compare against.
     """
     rivals = {model: score for model, score in scores.items() if model != selected}
@@ -60,8 +60,9 @@ def _rank_models(
     The scores let callers see how much better the winner was than the next
     class.  When two classes score within noise of each other the choice is a
     coin flip that a single label would hide, so the margin is reported rather
-    than discarded.  Returns ``(selected, {model: log-AIC score})``; the score
-    map is empty for series too short for model comparison.
+    than discarded.  Returns ``(selected, {model: AIC score})``; the score map
+    is empty for series too short for model comparison.  Scores are AIC values
+    of relative-error fits (see `fitting._model_score`).
     """
     if len(x) != len(y):
         raise ValueError("x and y must have the same length")
@@ -88,12 +89,11 @@ def _rank_models(
         return (slope_hint if positive_series else "O(n)"), {}
 
     bases = _basis_functions()
-    aic_by_model = {
-        model: _log_space_aic(x, y, bases[model]) for model in _MODEL_ORDER[1:]
-    }
-    candidates = {
-        model: score for model, score in aic_by_model.items() if math.isfinite(score)
-    }
+    candidates = {}
+    for model in _MODEL_ORDER[1:]:
+        score = _model_score(x, y, bases[model])
+        if math.isfinite(score):
+            candidates[model] = score
     # Exponential bases can overfit short polynomial series. Only admit this
     # candidate when observed growth is already beyond the polynomial range.
     if positive_series and _log_log_slope(x, y) < 3.2:
@@ -102,22 +102,19 @@ def _rank_models(
         return (slope_hint if positive_series else "O(n)"), {}
 
     selected = min(candidates, key=lambda model: candidates[model])
+    best_score = candidates[selected]
     selected_idx = _MODEL_ORDER.index(selected)
-    slope_idx = _MODEL_ORDER.index(slope_hint)
 
+    # Only a class the score cannot separate from the winner may replace it:
+    # the tail check breaks ties, it does not overrule the evidence.
     while selected_idx > 1:
         simpler = _MODEL_ORDER[selected_idx - 1]
         current = _MODEL_ORDER[selected_idx]
-        if not _tail_ratio_favors_simpler(x, y, simpler, current):
+        if candidates.get(simpler, math.inf) > best_score + _STEP_DOWN_AIC_TOL:
             break
-
-        simpler_score = aic_by_model.get(simpler, float("inf"))
-        current_score = aic_by_model[current]
-        if simpler_score <= current_score + _STEP_DOWN_AIC_TOL or (
-            _MODEL_ORDER.index(simpler) == slope_idx
-        ):
-            selected_idx -= 1
-            continue
-        break
+        _, simpler_baseline, _ = _wls_fit(x, y, bases[simpler])
+        if not _tail_ratio_favors_simpler(x, y, simpler, current, simpler_baseline):
+            break
+        selected_idx -= 1
 
     return _MODEL_ORDER[selected_idx], candidates

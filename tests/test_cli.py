@@ -257,7 +257,7 @@ def test_report_autogenerates_fits_with_strict_strategy(bench_dir: Path):
 
 def test_sort_bench_example_smoke(tmp_path: Path):
     example_cfg = Path("examples/sort_bench.yaml")
-    data = yaml.safe_load(example_cfg.read_text())
+    data = yaml.safe_load(example_cfg.read_text(encoding="utf-8"))
     data["grid"]["n"] = [100, 1000]
     data["grid"]["impl"] = ["random", "sorted"]
     data["limits"]["warmups"] = 0

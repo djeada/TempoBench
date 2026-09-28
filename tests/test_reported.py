@@ -140,7 +140,6 @@ def test_interrupting_a_trial_kills_the_child(tmp_path: Path, monkeypatch):
     a long benchmark keeps running with nothing watching it.
     """
     import time as _time
-    from types import SimpleNamespace
 
     import psutil
 
@@ -154,23 +153,15 @@ def test_interrupting_a_trial_kills_the_child(tmp_path: Path, monkeypatch):
     """)
 
     real_sleep = _time.sleep
+    real_sample = process_mod._MemorySampler.sample
 
-    def interrupt_once_the_child_is_up(seconds):
-        # A Ctrl-C lands in the runner's polling sleep, not in wait().
+    def interrupt_once_the_child_is_up(self, now):
+        # A Ctrl-C lands in the runner's monitoring loop, not in the child.
         if pidfile.exists():
             raise KeyboardInterrupt
-        real_sleep(seconds)
+        real_sample(self, now)
 
-    # Rebind the module's own `time` name rather than patching the real time
-    # module: setattr on the module object is global, so subprocess's internal
-    # sleeps would raise too while the runner is terminating the child.
-    monkeypatch.setattr(
-        process_mod,
-        "time",
-        SimpleNamespace(
-            perf_counter=_time.perf_counter, sleep=interrupt_once_the_child_is_up
-        ),
-    )
+    monkeypatch.setattr(process_mod._MemorySampler, "sample", interrupt_once_the_child_is_up)
 
     with pytest.raises(KeyboardInterrupt):
         run_once(f"{sys.executable} {script}", {}, None, None, 0.01)

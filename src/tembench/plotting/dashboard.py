@@ -40,7 +40,7 @@ def create_dashboard(
         charts.append(plot_heatmap(summary_csv, x=x, y=color))
 
     if runs_jsonl and runs_jsonl.exists():
-        charts.append(plot_boxplot(runs_jsonl, x=color))
+        charts.append(plot_boxplot(runs_jsonl, x=color, size=x))
 
     if len(charts) == 1:
         return charts[0]

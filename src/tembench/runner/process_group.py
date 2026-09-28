@@ -5,10 +5,16 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
+
+import psutil
 
 if TYPE_CHECKING:
     from subprocess import Popen
+
+#: Blocks for up to the given number of seconds; True once the child has exited.
+ExitWaiter = Callable[[float], bool]
 
 
 def popen_process_group_kwargs() -> dict[str, Any]:
@@ -19,16 +25,51 @@ def popen_process_group_kwargs() -> dict[str, Any]:
     return {"start_new_session": True}
 
 
-def terminate_process_group(proc: Popen[str], grace_period_sec: float = 2.0) -> None:
-    """Terminate a subprocess and any children started in its process group."""
+def _popen_waiter(proc: Popen[Any]) -> ExitWaiter:
+    def wait(timeout: float) -> bool:
+        try:
+            proc.wait(timeout)
+        except subprocess.TimeoutExpired:
+            return False
+        return True
+
+    return wait
+
+
+def terminate_process_group(
+    proc: Popen[Any],
+    grace_period_sec: float = 2.0,
+    wait_exit: ExitWaiter | None = None,
+) -> None:
+    """Terminate a subprocess and any children started in its process group.
+
+    `wait_exit` lets a caller that reaps the child itself (to collect its
+    resource usage) keep this function from racing it for the exit status.
+    """
+    wait = wait_exit or _popen_waiter(proc)
     if os.name == "nt":
-        _terminate_windows(proc, grace_period_sec)
+        _terminate_windows(proc, grace_period_sec, wait)
     else:
-        _terminate_posix(proc, grace_period_sec)
+        _terminate_posix(proc, grace_period_sec, wait)
 
 
-def _terminate_posix(proc: Popen[str], grace_period_sec: float) -> None:
-    if proc.poll() is not None:
+def kill_leftover_group(proc: Popen[Any]) -> None:
+    """Kill whatever is still running in the child's group after it exited.
+
+    A benchmark that backgrounds a helper and exits would otherwise leave it
+    competing for the CPU with every later trial.  Windows has no process
+    group to sweep once the parent is gone, so this is POSIX only.
+    """
+    if os.name == "nt":
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _terminate_posix(proc: Popen[Any], grace_period_sec: float, wait: ExitWaiter) -> None:
+    if wait(0):
         return
 
     try:
@@ -39,9 +80,7 @@ def _terminate_posix(proc: Popen[str], grace_period_sec: float) -> None:
         except OSError:
             return
 
-    try:
-        proc.wait(grace_period_sec)
-    except subprocess.TimeoutExpired:
+    if not wait(grace_period_sec):
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except OSError:
@@ -49,15 +88,20 @@ def _terminate_posix(proc: Popen[str], grace_period_sec: float) -> None:
                 proc.kill()
             except OSError:
                 return
-        try:
-            proc.wait(grace_period_sec)
-        except subprocess.TimeoutExpired:
-            pass
+        wait(grace_period_sec)
 
 
-def _terminate_windows(proc: Popen[str], grace_period_sec: float) -> None:
-    if proc.poll() is not None:
+def _terminate_windows(proc: Popen[Any], grace_period_sec: float, wait: ExitWaiter) -> None:
+    if wait(0):
         return
+
+    # CTRL_BREAK and TerminateProcess reach only the direct child, so a
+    # wrapper script's workers would outlive the timeout.  Collect them first:
+    # once the parent is gone they can no longer be found by ancestry.
+    try:
+        descendants = psutil.Process(proc.pid).children(recursive=True)
+    except psutil.Error:
+        descendants = []
 
     ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
     try:
@@ -68,16 +112,17 @@ def _terminate_windows(proc: Popen[str], grace_period_sec: float) -> None:
         try:
             proc.terminate()
         except OSError:
-            return
+            pass
 
-    try:
-        proc.wait(grace_period_sec)
-    except subprocess.TimeoutExpired:
+    if not wait(grace_period_sec):
         try:
             proc.kill()
         except OSError:
-            return
+            pass
+        wait(grace_period_sec)
+
+    for child in descendants:
         try:
-            proc.wait(grace_period_sec)
-        except subprocess.TimeoutExpired:
+            child.kill()
+        except psutil.Error:
             pass

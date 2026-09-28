@@ -199,13 +199,15 @@ def test_run_benchmarks_prune_on_timeout_fires_skip_callbacks(tmp_path: Path):
     out = tmp_path / "runs.jsonl"
     calls = []
     run_benchmarks(cfg, out, seed=0, on_trial=lambda *a: calls.append(a))
+    # n=1 times out on its first repetition, so its second is not run either.
     assert len(calls) == 4
     assert [call[4]["status"] for call in calls] == [
         "timeout",
-        "timeout",
+        "skipped",
         "skipped",
         "skipped",
     ]
+    assert [call[2] for call in calls] == [1, 2, 1, 2]
 
 
 def test_prune_on_timeout_does_not_truncate_a_different_series(tmp_path: Path):
@@ -216,7 +218,7 @@ def test_prune_on_timeout_does_not_truncate_a_different_series(tmp_path: Path):
     starving its complexity fit of the data points it needs.
     """
     cfg = Config(
-        benchmarks=[Benchmark(name="mixed", cmd="{cmd}")],
+        benchmarks=[Benchmark(name="mixed", cmd="{cmd:raw}")],
         grid={
             "n": [1, 2, 3],
             "cmd": [

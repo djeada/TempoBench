@@ -7,7 +7,7 @@ from typing import Optional
 
 import typer
 
-from ...plotting import create_dashboard
+from ...plotting import create_dashboard, save_chart
 from ..app import app, console, load_summary, print_axes, resolve_axes
 
 
@@ -27,7 +27,10 @@ def dashboard(
         None, help="Series grouping column (default: inferred)"
     ),
     output: Path = typer.Option(
-        Path("artifacts/dashboard.html"), help="Output path for dashboard"
+        Path("artifacts/dashboard.html"),
+        "--output",
+        "--out-html",
+        help="Output path for dashboard",
     ),
     title: str = typer.Option("TempoBench Dashboard", help="Dashboard title"),
     log_x: bool = typer.Option(False, help="Use log scale for X axis"),
@@ -61,7 +64,7 @@ def dashboard(
     )
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    dashboard_chart.save(output)
+    save_chart(dashboard_chart, output)
 
     console.print()
     console.print(f"[green]✓[/green] Dashboard saved to [bold]{output}[/bold]")

@@ -133,3 +133,38 @@ def test_limits_defaults():
     assert lim.shuffle is True
     assert lim.growth_key == "n"
     assert lim.metric == "auto"
+
+
+@pytest.mark.parametrize(
+    "body, message",
+    [
+        ("grid:\n  impl: hash\n", "must be a list"),
+        ("grid:\n  n: 100\n", "must be a list"),
+        ("grid:\n  timeout: [1, 2]\n", "reserved"),
+        ("grid:\n  n: [1]\nlimits:\n  prune_on_timeout: 'false'\n", "true or false"),
+        ("grid:\n  n: [1]\nlimits:\n  repeats: 2.5\n", "whole number"),
+        ("grid:\n  n: [1]\nlimits:\n  repeats: true\n", "whole number"),
+        ("grid:\n  n: [1]\nlimits:\n  timeout_sec: '30'\n", "a number"),
+        ("grid:\n  n: [1]\nlimits:\n  repeat: 5\n", "unknown limits key"),
+        ("grid:\n  n: [1]\npin_cpu: first\n", "pin_cpu"),
+    ],
+)
+def test_nonsense_is_rejected_with_a_clear_message(tmp_path: Path, body: str, message: str):
+    p = tmp_path / "c.yaml"
+    p.write_text("benchmarks:\n  - name: b\n    cmd: 'echo {n}'\n" + body)
+    with pytest.raises(ValueError, match=message):
+        load_config(p)
+
+
+def test_empty_grid_and_limits_sections_mean_defaults(tmp_path: Path):
+    p = tmp_path / "c.yaml"
+    p.write_text("benchmarks:\n  - name: b\n    cmd: 'true'\ngrid:\nlimits:\n")
+    cfg = load_config(p)
+    assert cfg.grid == {}
+    assert cfg.limits.repeats == 3
+
+
+def test_env_values_become_strings(tmp_path: Path):
+    p = tmp_path / "c.yaml"
+    p.write_text("benchmarks:\n  - name: b\n    cmd: 'true'\n    env: {THREADS: 4}\n")
+    assert load_config(p).benchmarks[0].env == {"THREADS": "4"}

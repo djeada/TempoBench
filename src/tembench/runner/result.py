@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 TrialStatus = Literal["ok", "failed", "timeout", "error", "skipped"]
@@ -24,6 +24,11 @@ class TrialResult(Mapping[str, object]):
     bench: str | None = None
     cmd: str | None = None
     params: dict[str, object] = field(default_factory=dict)
+    #: The configured ``limits.metric``.  Both readings are always stored, so
+    #: this is what tells a summary which one the user asked for.
+    metric: str | None = None
+    #: Launches it took to get this outcome; more than 1 only under --retries.
+    attempts: int = 1
 
     def with_context(
         self,
@@ -31,20 +36,15 @@ class TrialResult(Mapping[str, object]):
         bench: str,
         cmd: str,
         params: Mapping[str, object],
+        metric: str | None = None,
     ) -> TrialResult:
         """Attach benchmark metadata to a process-level result."""
-        return TrialResult(
-            ts=self.ts,
-            status=self.status,
-            rc=self.rc,
-            wall_ms=self.wall_ms,
-            reported_ms=self.reported_ms,
-            peak_rss_mb=self.peak_rss_mb,
-            stdout=self.stdout,
-            stderr=self.stderr,
+        return replace(
+            self,
             bench=bench,
             cmd=cmd,
             params=dict(params),
+            metric=metric if metric is not None else self.metric,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -71,6 +71,10 @@ class TrialResult(Mapping[str, object]):
             record["stdout"] = self.stdout
         if self.stderr is not None:
             record["stderr"] = self.stderr
+        if self.metric is not None:
+            record["metric"] = self.metric
+        if self.attempts != 1:
+            record["attempts"] = self.attempts
         return record
 
     @classmethod
@@ -89,6 +93,8 @@ class TrialResult(Mapping[str, object]):
             bench=record.get("bench"),  # type: ignore[arg-type]
             cmd=record.get("cmd"),  # type: ignore[arg-type]
             params=dict(params) if isinstance(params, Mapping) else {},
+            metric=record.get("metric"),  # type: ignore[arg-type]
+            attempts=int(record.get("attempts", 1)),  # type: ignore[call-overload]
         )
 
     def __getitem__(self, key: str) -> object:

@@ -15,6 +15,8 @@ _CONST_FLAT_RATIO = 1.15
 _CONST_RELAXED_RATIO = 1.5
 _CONST_RHO_MAX = 0.6
 _EXPONENT_BOOTSTRAP_SAMPLES = 200
+# Relative residuals below this are timer resolution, not model misfit.
+_REL_RESIDUAL_FLOOR = 1e-4
 
 
 def _ols_fit(
@@ -33,12 +35,76 @@ def _ols_fit(
 
     denom = n * sum_ff - sum_f * sum_f
     if abs(denom) < 1e-30:
-        return 0.0, sum_y / n, float("inf")
+        # A constant basis leaves only the intercept: the mean, with the
+        # residuals around it — not an infinite RSS.
+        mean = sum_y / n
+        return 0.0, mean, sum((yi - mean) ** 2 for yi in y)
 
     C = (n * sum_fy - sum_f * sum_y) / denom
     baseline = (sum_y - C * sum_f) / n
     rss = sum((yi - (C * fi + baseline)) ** 2 for fi, yi in zip(F, y))
     return C, baseline, rss
+
+
+def _relative_scales(y: List[float]) -> List[float]:
+    """Return the magnitude each residual is measured against.
+
+    Timings are compared by relative error, so each point is scaled by its own
+    value.  Zero or negative readings (below timer resolution) borrow the
+    smallest positive one; a series with no positive reading falls back to
+    plain least squares.
+    """
+    positive = [v for v in y if v > 0]
+    if not positive:
+        return [1.0] * len(y)
+    floor = min(positive)
+    return [max(v, floor) for v in y]
+
+
+def _wls_fit(
+    x: List[float], y: List[float], basis: Callable[[float], float]
+) -> tuple[float, float, float]:
+    """Fit y = C·f(n) + baseline minimising relative error.
+
+    Returns ``(C, baseline, sse)`` where ``sse`` is the sum of squared
+    relative residuals.  Plain OLS on timings spanning several decades is
+    decided by the largest few points alone: it drives the intercept negative
+    and misses every small-n point by orders of magnitude, so the class it
+    favours is whichever happens to get a lucky intercept sign.  Weighting each
+    point by 1/y² makes every reading count equally, in the same relative terms
+    the model comparison scores them in.
+    """
+    n = len(x)
+    if n < 2:
+        return 0.0, (y[0] if y else 0.0), float("inf")
+
+    scales = _relative_scales(y)
+    w = [1.0 / (s * s) for s in scales]
+    F = [basis(xi) for xi in x]
+    # Normalise the basis so n²·2ⁿ or n³ at large n cannot overflow the sums.
+    f_max = max(abs(fi) for fi in F)
+    if f_max > 0:
+        F = [fi / f_max for fi in F]
+
+    W = sum(w)
+    f_mean = sum(wi * fi for wi, fi in zip(w, F)) / W
+    y_mean = sum(wi * yi for wi, yi in zip(w, y)) / W
+    s_ff = sum(wi * (fi - f_mean) ** 2 for wi, fi in zip(w, F))
+    s_fy = sum(wi * (fi - f_mean) * (yi - y_mean) for wi, fi, yi in zip(w, F, y))
+
+    # Degenerate (constant) basis, judged relative to the basis's own weighted
+    # magnitude so that tiny weights on huge timings do not trip it.
+    if s_ff <= 1e-12 * sum(wi * fi * fi for wi, fi in zip(w, F)):
+        C, baseline = 0.0, y_mean
+    else:
+        C = s_fy / s_ff
+        baseline = y_mean - C * f_mean
+    sse = sum(
+        ((yi - (C * fi + baseline)) / si) ** 2 for fi, yi, si in zip(F, y, scales)
+    )
+    if f_max > 0:
+        C /= f_max
+    return C, baseline, sse
 
 
 def _rankdata(values: List[float]) -> List[float]:
@@ -95,7 +161,9 @@ def _flat_ratio_and_rho(x: List[float], y: List[float]) -> tuple[float, float]:
     return ratio, rho
 
 
-def _is_effectively_constant(y: List[float], x: List[float] | None = None) -> bool:
+def _is_effectively_constant(
+    y: List[float], x: List[float] | None = None, allow_outlier: bool = True
+) -> bool:
     """Check if data is effectively constant, with outlier robustness for n>=4.
 
     For positive series, prefer a scale-free rule:
@@ -103,6 +171,10 @@ def _is_effectively_constant(y: List[float], x: List[float] | None = None) -> bo
     - allow one-point-outlier robustness only when the remaining points are
       both low-range and low-trend (to avoid classifying slow monotone growth
       like [1.0, 1.05, ..., 1.2] as constant).
+
+    The point at the largest input size is never discarded as an outlier: it
+    is the best evidence of asymptotic growth there is, and a series that is
+    flat until its last reading jumps is exactly what growth looks like.
 
     For non-positive series, fall back to the legacy CV heuristic.
     """
@@ -119,14 +191,16 @@ def _is_effectively_constant(y: List[float], x: List[float] | None = None) -> bo
     if all(abs(yi) < 1e-30 for yi in y):
         return True
 
+    x_max = max(x)
+    droppable = [i for i in range(n) if x[i] < x_max] if allow_outlier and n >= 4 else []
+
     if any(yi <= 0 for yi in y):
         if _cv_is_flat(y):
             return True
-        if len(y) >= 4:
-            for skip in range(len(y)):
-                subset = [yi for i, yi in enumerate(y) if i != skip]
-                if _cv_is_flat(subset):
-                    return True
+        for skip in droppable:
+            subset = [yi for i, yi in enumerate(y) if i != skip]
+            if _cv_is_flat(subset):
+                return True
         return False
 
     ratio, rho = _flat_ratio_and_rho(x, y)
@@ -135,14 +209,20 @@ def _is_effectively_constant(y: List[float], x: List[float] | None = None) -> bo
     ):
         return True
 
-    if n >= 4:
-        for skip in range(n):
-            subset_x = [xi for i, xi in enumerate(x) if i != skip]
-            subset = [yi for i, yi in enumerate(y) if i != skip]
-            ratio, rho = _flat_ratio_and_rho(subset_x, subset)
-            if ratio <= _CONST_RELAXED_RATIO and rho <= _CONST_RHO_MAX:
-                return True
+    for skip in droppable:
+        subset_x = [xi for i, xi in enumerate(x) if i != skip]
+        subset = [yi for i, yi in enumerate(y) if i != skip]
+        ratio, rho = _flat_ratio_and_rho(subset_x, subset)
+        if ratio <= _CONST_RELAXED_RATIO and rho <= _CONST_RHO_MAX:
+            return True
     return False
+
+
+def _constant_only_without_outlier(y: List[float], x: List[float]) -> bool:
+    """Return True when the series is O(1) only once a reading is discarded."""
+    return _is_effectively_constant(y, x) and not _is_effectively_constant(
+        y, x, allow_outlier=False
+    )
 
 
 def _log_log_slope(x: List[float], y: List[float]) -> float:
@@ -162,7 +242,7 @@ def _slope_to_model(slope: float) -> str:
     """Map a log-log slope to a coarse complexity class.
 
     This is a hint, not a classifier: it is consulted only for series too short
-    for model comparison, and as a tie-breaker in the step-down guard.
+    for model comparison.
 
     It deliberately does not return O(√n), whose true slope of 0.5 sits inside
     the band this function assigns to O(n).  Carving out a √n band would take
@@ -203,8 +283,17 @@ def _quantile(values: List[float], q: float) -> float:
 def _bootstrap_exponent_ci(
     x: List[float], y: List[float], samples: int = _EXPONENT_BOOTSTRAP_SAMPLES
 ) -> tuple[float, float, float]:
-    """Estimate a deterministic bootstrap CI for the empirical log-log slope."""
-    if len(x) != len(y) or len(x) < 2 or any(v <= 0 for v in x) or any(v <= 0 for v in y):
+    """Estimate a deterministic bootstrap CI for the empirical log-log slope.
+
+    Points with a non-positive size or duration have no logarithm and are left
+    out, rather than disabling the estimate for the whole series.
+    """
+    if len(x) != len(y):
+        return float("nan"), float("nan"), float("nan")
+    pairs = [(xi, yi) for xi, yi in zip(x, y) if xi > 0 and yi > 0]
+    x = [p[0] for p in pairs]
+    y = [p[1] for p in pairs]
+    if len(set(x)) < 2:
         return float("nan"), float("nan"), float("nan")
 
     exponent = _log_log_slope(x, y)
@@ -233,38 +322,51 @@ def _bootstrap_exponent_ci(
     return exponent, _quantile(slopes, 0.025), _quantile(slopes, 0.975)
 
 
-def _log_space_aic(
+def _model_score(
     x: List[float], y: List[float], basis: Callable[[float], float]
 ) -> float:
-    """Compute an AIC-like score from log-space residuals of an OLS fit."""
-    C, baseline, _ = _ols_fit(x, y, basis)
-    if C < 0:
-        return float("inf")
+    """Return the AIC of a relative-error fit of one class; lower is better.
 
-    positive_values = [yi for yi in y if yi > 0]
-    if not positive_values:
+    ``n·log(SSE/n) + 2k`` with k = 2 (C and baseline) is the Gaussian AIC of
+    the relative residuals, so score differences are ordinary ΔAIC values.
+    Relative errors below `_REL_RESIDUAL_FLOOR` are treated as that floor:
+    timers do not resolve better, and without it noise-free data would win by
+    arbitrarily large margins that mean nothing.
+    """
+    C, _, sse = _wls_fit(x, y, basis)
+    if C < 0 or not math.isfinite(sse):
         return float("inf")
-
-    eps = max(1e-12, min(positive_values) * 1e-9)
-    preds = [max(C * basis(xi) + baseline, eps) for xi in x]
-    sse = sum(
-        (math.log(max(yi, eps)) - math.log(pi)) ** 2 for yi, pi in zip(y, preds)
-    )
     n = len(x)
-    return n * math.log(max(sse / n, 1e-30)) + 4.0
+    return n * math.log(max(sse / n, _REL_RESIDUAL_FLOOR**2)) + 4.0
 
 
 def _tail_ratio_favors_simpler(
-    x: List[float], y: List[float], simpler_model: str, complexer_model: str
+    x: List[float],
+    y: List[float],
+    simpler_model: str,
+    complexer_model: str,
+    baseline: float = 0.0,
 ) -> bool:
-    """Return True when the tail growth is closer to the simpler model."""
-    if len(x) < 4 or x[-1] <= x[-2] or x[-2] <= 0 or y[-2] <= 0:
+    """Return True when the tail growth is closer to the simpler model.
+
+    ``baseline`` is subtracted first: a constant overhead flattens the raw
+    ratio of the last two readings and makes every class look simpler than it
+    is.
+    """
+    if len(x) < 4 or x[-1] <= x[-2] or x[-2] <= 0:
+        return False
+    low, high = y[-2] - baseline, y[-1] - baseline
+    if low <= 0 or high <= 0:
         return False
 
     bases = _basis_functions()
-    observed = y[-1] / y[-2]
-    expected_simpler = bases[simpler_model](x[-1]) / bases[simpler_model](x[-2])
-    expected_complexer = bases[complexer_model](x[-1]) / bases[complexer_model](x[-2])
+    f_simple = bases[simpler_model]
+    f_complex = bases[complexer_model]
+    if f_simple(x[-2]) <= 0 or f_complex(x[-2]) <= 0:
+        return False
+    observed = high / low
+    expected_simpler = f_simple(x[-1]) / f_simple(x[-2])
+    expected_complexer = f_complex(x[-1]) / f_complex(x[-2])
 
     return abs(math.log(observed / expected_simpler)) <= abs(
         math.log(observed / expected_complexer)
@@ -274,6 +376,30 @@ def _tail_ratio_favors_simpler(
 def _tail_ratio_favors_linear(x: List[float], y: List[float]) -> bool:
     """Backward-compatible wrapper for the O(n) vs O(n log n) tail check."""
     return _tail_ratio_favors_simpler(x, y, "O(n)", "O(n log n)")
+
+
+def _upper_bound_scale(
+    x: List[float],
+    y: List[float],
+    basis: Callable[[float], float],
+    C: float,
+    baseline: float,
+) -> float:
+    """Return the smallest factor ≥ 1 lifting the curve over every point.
+
+    The curve is fitted by relative error, so the misses it leaves are
+    relative too.  Covering them additively would lift the whole curve by the
+    absolute miss at the largest n — hundreds of ms over readings of one — so
+    the curve is scaled instead, which keeps the bound as tight at small n as
+    at large.  Points the curve predicts as non-positive are left to
+    `_upper_bound_offset`.
+    """
+    scale = 1.0
+    for xi, yi in zip(x, y):
+        predicted = C * basis(xi) + baseline
+        if predicted > 0 and yi > predicted * scale:
+            scale = yi / predicted
+    return scale
 
 
 def _upper_bound_offset(

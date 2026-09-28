@@ -6,11 +6,10 @@ import json
 import threading
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime, timezone
 from pathlib import Path
 
 from ..config import Config
-from .grid import _run_grid_point, format_cmd
+from .grid import _run_grid_point, error_records
 from .process import build_once
 from .result import TrialResult
 
@@ -32,9 +31,24 @@ def _run_parallel(
     reps = max(1, cfg.limits.repeats)
     lock = threading.Lock()
 
-    with out_path.open(mode) as f, ProcessPoolExecutor(max_workers=workers) as pool:
+    metric = cfg.limits.metric
+
+    with out_path.open(mode, encoding="utf-8") as f, ProcessPoolExecutor(max_workers=workers) as pool:
+
+        def emit(bench_name: str, params: dict[str, object], results: list[TrialResult]):
+            with lock:
+                for i, rec in enumerate(results):
+                    f.write(json.dumps(rec.to_dict()) + "\n")
+                    f.flush()
+                    if on_trial:
+                        on_trial(bench_name, params, i + 1, reps, rec)
+
         for bench in cfg.benchmarks:
-            build_once(bench)
+            build_error = build_once(bench)
+            if build_error:
+                for params in points:
+                    emit(bench.name, params, error_records(bench, params, reps, build_error, metric))
+                continue
 
             # Submit all grid points to the shared pool.
             future_to_params = {}
@@ -48,7 +62,8 @@ def _run_parallel(
                     cfg.limits.repeats,
                     retries,
                     poll_interval_sec,
-                    cfg.limits.metric,
+                    metric,
+                    cfg.limits.prune_on_timeout,
                 )
                 future_to_params[fut] = params
 
@@ -58,23 +73,5 @@ def _run_parallel(
                     results = fut.result()
                 except Exception as exc:
                     # If a worker crashes, record an error
-                    results = [
-                        TrialResult(
-                            ts=datetime.now(timezone.utc).isoformat(),
-                            status="error",
-                            rc=None,
-                            wall_ms=0.0,
-                            peak_rss_mb=0.0,
-                            stderr=str(exc),
-                            bench=bench.name,
-                            cmd=format_cmd(bench.cmd, params),
-                            params=dict(params),
-                        )
-                    ]
-
-                with lock:
-                    for i, rec in enumerate(results):
-                        f.write(json.dumps(rec.to_dict()) + "\n")
-                        f.flush()
-                        if on_trial:
-                            on_trial(bench.name, params, i + 1, reps, rec)
+                    results = error_records(bench, params, reps, str(exc), metric)
+                emit(bench.name, params, results)

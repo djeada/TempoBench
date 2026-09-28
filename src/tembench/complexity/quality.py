@@ -14,6 +14,9 @@ import math
 from dataclasses import dataclass
 from typing import Sequence
 
+from .fitting import _is_effectively_constant
+from .formatting import _MODEL_SLOPE_INTERVALS
+
 #: Fewer points than this cannot separate neighbouring complexity classes.
 MIN_POINTS = 4
 #: Input sizes must span at least this factor for growth to be observable.
@@ -29,10 +32,15 @@ MAX_OVERHEAD_SHARE = 0.5
 MAX_RELATIVE_SPREAD = 0.5
 #: Trials per input size below which a "median" is not really a median.
 MIN_SAMPLES = 3
-#: Log-AIC lead the chosen class needs over the next one to count as decided.
-#: Two is the conventional threshold for "substantially supported" in AIC model
-#: comparison; below it, the runner-up explains the data about as well.
-MIN_MODEL_MARGIN = 2.0
+#: AIC lead the chosen class needs over the next one to count as decided.
+#: Two is the textbook threshold for a single comparison, but every fit here
+#: is a contest between seven classes on a handful of points: on synthetic
+#: sweeps a wrong class led by 2-6 about as often as a right one, while a lead
+#: of six ("strong" evidence) was almost never wrong.
+MIN_MODEL_MARGIN = 6.0
+#: Fitted overhead below this share of the smallest reading is too little to
+#: depress the measured exponent, so it cannot excuse one too low for the class.
+_OVERHEAD_FREE_SHARE = 0.05
 
 _NOTE_TEXT = {
     "few-points": f"fewer than {MIN_POINTS} input sizes",
@@ -42,7 +50,15 @@ _NOTE_TEXT = {
     f"{MAX_EXPONENT_CI_WIDTH:g}",
     "overhead-dominated": "more than "
     f"{MAX_OVERHEAD_SHARE:.0%} of the largest reading is constant overhead",
-    "ambiguous-class": "another class explains the data about as well",
+    "ambiguous-class": "another class fits almost as well "
+    f"(AIC lead under {MIN_MODEL_MARGIN:g})",
+    "exponent-mismatch": "the measured growth exponent lies outside the range "
+    "this class produces",
+    "single-point-growth": "all of the growth comes from the largest input "
+    "size — one reading decides the class",
+    "outlier-dropped": "constant only after discarding one outlying reading",
+    "non-positive-timings": "some durations are zero or negative — below the "
+    "timer's resolution?",
     "thin-samples": f"fewer than {MIN_SAMPLES} trials per input size",
     "unstable-timings": "repeated trials disagree by more than "
     f"{MAX_RELATIVE_SPREAD:.0%} of the median — was the machine busy?",
@@ -63,11 +79,58 @@ class FitQuality:
 
 
 def _ratio(values: Sequence[float]) -> float:
-    """Return max/min for a strictly positive series, else infinity."""
+    """Return max/min over the positive values, or 1 when there are none.
+
+    Zeros (an n=0 grid point, a reading below timer resolution) have no ratio.
+    Treating them as infinite spread would switch off every range check they
+    appear in, so they are left out; zero durations get their own caveat.
+    """
     positive = [v for v in values if v > 0]
-    if not positive or len(positive) != len(values):
-        return float("inf")
+    if not positive:
+        return 1.0
     return max(positive) / min(positive)
+
+
+def _class_exponent_band(model: str, x: Sequence[float]) -> tuple[float, float]:
+    """Return the log-log slopes the class can produce over these sizes.
+
+    The fixed bands describe large n.  log n and n·log n have a local exponent
+    of 1/ln n (plus one), which is far above its large-n value over n = 2..8,
+    so their band is widened to what the class itself traces there.
+    """
+    lower, upper = _MODEL_SLOPE_INTERVALS.get(model, (-math.inf, math.inf))
+    sizes = [v for v in x if v > 1]
+    if model in ("O(log n)", "O(n log n)") and sizes:
+        base = 1.0 if model == "O(n log n)" else 0.0
+        lower = min(lower, base + 1.0 / math.log(max(sizes)))
+        upper = max(upper, base + 1.0 / math.log(min(sizes)))
+    return lower, upper
+
+
+def _exponent_contradicts_class(
+    model: str,
+    x: Sequence[float],
+    y: Sequence[float],
+    ci_low: float,
+    ci_high: float,
+    fitted_baseline: float,
+) -> bool:
+    """Return True when the bootstrap exponent interval rules the class out.
+
+    Growth between two classes — cache and memory effects bending a curve —
+    fits the nearer class best without the class describing the data.  A
+    constant overhead flattens the raw exponent, so an exponent *below* the
+    class band only counts against it when the fit found no overhead that could
+    explain it.
+    """
+    if model == "O(1)" or not (math.isfinite(ci_low) and math.isfinite(ci_high)):
+        return False
+    lower, upper = _class_exponent_band(model, x)
+    if ci_low > upper:
+        return True
+    positive = [v for v in y if v > 0]
+    y_min = min(positive) if positive else 0.0
+    return ci_high < lower and fitted_baseline <= _OVERHEAD_FREE_SHARE * y_min
 
 
 def assess_fit(
@@ -78,6 +141,9 @@ def assess_fit(
     exponent_ci_low: float,
     exponent_ci_high: float,
     model_margin: float = float("inf"),
+    model: str | None = None,
+    fitted_baseline: float = 0.0,
+    dropped_outlier: bool = False,
     min_samples: float | None = None,
     max_relative_spread: float | None = None,
 ) -> FitQuality:
@@ -107,6 +173,29 @@ def assess_fit(
 
     if model_margin < MIN_MODEL_MARGIN:
         notes.append("ambiguous-class")
+
+    if model is not None and _exponent_contradicts_class(
+        model, x, y, exponent_ci_low, exponent_ci_high, fitted_baseline
+    ):
+        notes.append("exponent-mismatch")
+
+    if dropped_outlier:
+        notes.append("outlier-dropped")
+
+    # The largest input is never discarded as an outlier, so a flat series
+    # with one jump at the end is fitted as growth.  It may be; but it is one
+    # reading's word against all the others.
+    if model not in (None, "O(1)") and len(x) >= MIN_POINTS:
+        pairs = sorted(zip(x, y))
+        head_x = [p[0] for p in pairs if p[0] < pairs[-1][0]]
+        head_y = [p[1] for p in pairs if p[0] < pairs[-1][0]]
+        if len(head_x) >= 2 and _is_effectively_constant(
+            head_y, head_x, allow_outlier=False
+        ):
+            notes.append("single-point-growth")
+
+    if any(v <= 0 for v in y):
+        notes.append("non-positive-timings")
 
     # Too few trials per point leaves noise that is systematic rather than
     # scattered — it bends the curve instead of widening the spread, so none of
