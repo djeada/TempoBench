@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.0
+
+This release improves measurement accuracy and makes benchmark results more
+reliable to interpret.
+
+### Measurement and execution
+
+- Trial duration no longer depends on the memory polling interval, and peak
+  memory uses the operating system's high-water mark plus process-tree sampling.
+- Retries, launch errors, invalid output, build failures, timeouts, and skipped
+  repetitions are recorded consistently. Background child processes are cleaned
+  up after a benchmark exits.
+- Commands receive grid values as quoted arguments. Config validation catches
+  malformed grids, reserved axis names, mistyped limits, and unknown keys.
+
+### Fitting and reporting
+
+- Complexity models are fitted and ranked using relative error, with improved
+  handling of overhead, outliers, non-finite values, and small inputs.
+- Summaries retain attempted grid points without successful trials, and
+  comparisons flag when a previously measured point has no timing.
+- Charts and reports handle additional grid axes, empty points, log scales,
+  benchmark filtering, trial statuses, and escaped output more reliably.
+
 ## 0.1.0
 
 First release.

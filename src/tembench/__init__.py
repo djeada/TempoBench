@@ -1,4 +1,4 @@
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 #: Canonical project URL.  Generated reports are meant to be shared, so the
 #: link they carry has to point at the real repository — defined once here
