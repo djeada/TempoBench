@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+This release makes complexity fits markedly more accurate and their confidence
+more honest. It reworks the charts and reports, and adds `tembench reel` for
+turning a run into a short video. A new example benchmarks seven algorithms in
+C++, Rust and Python and checks that every language is fitted the same class.
 
 ### Fitting
 
@@ -62,8 +67,10 @@
 ### Examples
 
 - `examples/cross_language`: seven algorithms, one per class, in C++, Rust
-  and Python, with a script that checks every language computes the same
-  result and is fitted the same class.  `--reels` renders a video for each.
+  and Python, one folder per algorithm with a file per language.  A script
+  checks that every language computes the same result and is fitted the
+  same class; `--reels` renders a video for each, with a caption linking
+  the three implementations.
 - `unique_bench.yaml` sweeps smaller sizes, so its quadratic implementation
   has enough points to fit.
 
