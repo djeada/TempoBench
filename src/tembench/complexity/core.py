@@ -142,7 +142,7 @@ def fit_models(
         rival, margin = runner_up(model, scores)
 
         # Step 3: lift the fitted curve into an upper bound
-        fitted_baseline = baseline
+        fitted_C, fitted_baseline = C, baseline
         scale = _upper_bound_scale(x, y, fn, C, baseline)
         C, baseline = C * scale, baseline * scale
         offset = _upper_bound_offset(x, y, fn, C, baseline)
@@ -177,7 +177,7 @@ def fit_models(
             exponent_ci_high=exponent_ci_high,
             model_margin=margin,
             model=model,
-            relative_error=_relative_rms(x, y, fn, C / scale, fitted_baseline),
+            relative_error=_relative_rms(x, y, fn, fitted_C, fitted_baseline),
             dropped_outlier=model == "O(1)" and _constant_only_without_outlier(y, x),
             min_samples=min_samples,
             max_relative_spread=max_relative_spread,
