@@ -159,3 +159,17 @@ def test_every_page_type_shares_one_shell(tmp_path: Path):
         assert '<header class="page-header">' in page
         assert page.index('id="themeToggle"') < page.index("</header>"), "the toggle sits in the header"
         assert "linear-gradient" not in page
+
+
+def test_fits_without_caveats_read_from_csv_show_no_nan(tmp_path: Path):
+    # Empty caveats in fits.csv read back as NaN, which must not print as "nan".
+    from tembench.complexity import fit_models
+
+    rows = [{"bench": "a", "n": n, "time_ms_median": n * 1e-3} for n in (100, 1000, 10000, 100000)]
+    summary = _summary(tmp_path, rows)
+    fits_path = tmp_path / "fits.csv"
+    fit_models(pd.read_csv(summary), "n", "time_ms_median", ["bench"]).to_csv(fits_path, index=False)
+    assert pd.read_csv(fits_path)["caveats"].isna().all()
+
+    page = generate_report(summary, fits_csv=fits_path)
+    assert not re.search(r">\s*nan\s*<", page, re.IGNORECASE)

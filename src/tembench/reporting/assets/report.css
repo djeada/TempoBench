@@ -236,7 +236,7 @@ details > summary:hover { color: var(--c-text); }
   max-height: 70vh;
   border: 1px solid var(--c-border);
   border-radius: 8px;
-  scrollbar-color: var(--c-border) transparent;
+  scrollbar-color: var(--c-border) var(--c-surface);
 }
 .data-table {
   width: 100%;

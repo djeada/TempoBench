@@ -99,14 +99,19 @@ def _series_name(row: pd.Series, by: list[str], single_bench: bool) -> str:
     return " · ".join(str(row[c]) for c in shown) or "All measurements"
 
 
+def _text(value: object) -> str:
+    """A cell as text; empty cells read back from a CSV are NaN, not ""."""
+    return "" if value is None or (isinstance(value, float) and pd.isna(value)) else str(value)
+
+
 def _fit_cards(fits: pd.DataFrame, by: list[str], single_bench: bool) -> str:
     """One card per series: the class, how far to trust it, and its bound."""
     esc = html.escape
     cards = []
     for _, row in fits.iterrows():
         klass = str(row.get("display_model", row["model"]))
-        confidence = str(row.get("confidence", "") or "")
-        caveats = str(row.get("caveats", "") or "")
+        confidence = _text(row.get("confidence"))
+        caveats = _text(row.get("caveats"))
         rival = row.get("runner_up")
         alternative = ""
         # When a rival class explains the data about as well, it is named: it
@@ -119,7 +124,7 @@ def _fit_cards(fits: pd.DataFrame, by: list[str], single_bench: bool) -> str:
                 f'<span class="badge {_CONFIDENCE_CLASS.get(confidence, "neutral")}">'
                 f"{esc(confidence)} confidence</span>"
             )
-        notes = str(row.get("confidence_notes", "") or "")
+        notes = _text(row.get("confidence_notes"))
         cards.append(
             '<div class="fit-card">'
             f'<div class="fit-series">{esc(_series_name(row, by, single_bench))}</div>'

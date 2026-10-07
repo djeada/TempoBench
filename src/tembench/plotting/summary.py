@@ -79,7 +79,7 @@ def plot_memory(
 
     y_scale = axis_scale(log_y)
     encoding = dict(
-        x=alt.X(f"{x}:Q", title=label(x), scale=axis_scale(log_x), axis=number_axis(log_x, shown[x])),
+        x=alt.X(f"{x}:Q", title=label(x), scale=axis_scale(log_x, zero=False), axis=number_axis(log_x, shown[x])),
         y=alt.Y(f"{y_col}:Q", title=label(y_col), scale=y_scale, axis=number_axis(log_y, shown[y_col])),
         color=categorical_color(
             series,

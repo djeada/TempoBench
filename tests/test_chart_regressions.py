@@ -295,7 +295,7 @@ def test_wide_ranges_get_log_axes_unless_told_otherwise(tmp_path: Path):
     assert enc["x"]["scale"]["type"] == "log" and enc["y"]["scale"]["type"] == "log"
     assert all(f"{v:g}"[0] in "125" for v in enc["y"]["axis"]["values"]), "1-2-5 ticks, not every multiple"
     enc = plot_runtime(summary, log_x=False, log_y=False).to_dict()["layer"][0]["encoding"]
-    assert enc["x"]["scale"]["zero"] is True and enc["y"]["scale"]["zero"] is True
+    assert enc["x"]["scale"]["zero"] is False and enc["y"]["scale"]["zero"] is True
     assert plot_memory(summary).to_dict()["encoding"]["x"]["scale"]["type"] == "log"
 
 

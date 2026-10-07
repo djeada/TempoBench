@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased
+
+### Fitting
+
+- New O(2^n) class.  Exponential classes are considered when the largest
+  input is at most 64, instead of when the raw log-log slope is steep, which
+  startup overhead flattened: exponential growth plus overhead used to be
+  reported as O(n³).
+- A fitted intercept may only dip below zero by a quarter of the smallest
+  reading, so `C·n − b` can no longer pass for O(n log n).
+- The empirical exponent and its interval are measured net of the fitted
+  overhead: O(n²) plus startup measures n^2.0, not n^0.5.
+- Confidence is better calibrated.  New `poor-fit` and `constant-class`
+  caveats; short sweeps need a larger AIC lead; `few-points` counts distinct
+  sizes; exponential ranges are judged in doublings.  `fits.csv` gains a
+  `caveats` column of machine-readable codes.
+- On 2,286 synthetic series accuracy rises from 78% to 92%, and fits rated
+  high are right 99.5% of the time.
+
+### Running
+
+- The `TEMPOBENCH_MS` marker is found anywhere in stdout, not only in the
+  kept tail.
+- Timeouts are enforced on time however coarse `rss_poll_interval_sec` is.
+- `pin_cpu` pins only the benchmark and keeps TempoBench's own threads off
+  that core; an unavailable CPU is an error.
+- Configs are checked for what used to crash mid-sweep or corrupt a summary:
+  commands that cannot expand at some grid point, axes named like trial
+  fields, list-valued grid entries, duplicate benchmark names, null env
+  values.  Invalid configs are reported without a traceback.
+- Windows argument quoting handles a trailing backslash.
+
+### Charts and reports
+
+- The report leads with each series' class, confidence and bound, and draws
+  its runtime chart from the summary instead of a separate `runtime.html`.
+- Fit curves stay in their own benchmark's panel.  Axes go log
+  automatically for wide ranges; labels sit at the line ends.
+- One page layout, palette and number format across report, dashboard,
+  comparison and chart pages, following the system's light or dark theme.
+- `compare` leads with each point's verdict and change, separates slower
+  points from ones that could not be checked, and colours only the metric
+  that decides.
+- Every chart and report command accepts `--output` and `--out-html`;
+  `--bench` works on `dashboard`, `memory` and `heatmap`.  Asking for a
+  metric or axis that is not there is an error instead of a blank chart.
+
+### Examples
+
+- `examples/cross_language`: seven algorithms, one per class, in C++, Rust
+  and Python, with a script that checks every language computes the same
+  result and is fitted the same class.
+- `unique_bench.yaml` sweeps smaller sizes, so its quadratic implementation
+  has enough points to fit.
+
 ## 0.2.0
 
 This release improves measurement accuracy and makes benchmark results more

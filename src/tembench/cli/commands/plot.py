@@ -104,7 +104,7 @@ def plot(
         "--out-html",
         help="Output HTML path, or '-' to write the Vega-Lite JSON to stdout",
     ),
-    no_fit: bool = typer.Option(False, help="Disable Big-O fit overlay"),
+    no_fit: bool = typer.Option(False, "--no-fit", help="Disable Big-O fit overlay"),
     export_fits: Optional[Path] = typer.Option(
         None, help="Optional path to save fitted models CSV"
     ),

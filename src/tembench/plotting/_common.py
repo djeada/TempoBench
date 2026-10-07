@@ -350,10 +350,12 @@ def resolve_y(df: pd.DataFrame, y: str, fallbacks: Sequence[str]) -> str:
     return y
 
 
-def axis_scale(log_enabled: bool) -> alt.Scale:
+def axis_scale(log_enabled: bool, zero: bool = True) -> alt.Scale:
+    """Scale for a numeric axis.  `zero` anchors a linear one at 0, which
+    suits durations but not input sizes: n = 9…17 would fill half the chart."""
     # A "nice" log domain rounds out to whole decades, which can leave most
     # of the plot empty when the data covers only part of one.
-    return alt.Scale(type="log", nice=False) if log_enabled else alt.Scale(zero=True)
+    return alt.Scale(type="log", nice=False) if log_enabled else alt.Scale(zero=zero)
 
 
 def log_ticks(values: Sequence[float] | pd.Series) -> list[float]:

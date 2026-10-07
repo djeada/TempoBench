@@ -143,7 +143,7 @@ def plot_runtime(
     frame = pd.concat(parts, ignore_index=True)
 
     x_enc = alt.X(
-        f"{x}:Q", title=label(x), scale=axis_scale(log_x), axis=number_axis(log_x, frame[x])
+        f"{x}:Q", title=label(x), scale=axis_scale(log_x, zero=False), axis=number_axis(log_x, frame[x])
     )
     y_scale = axis_scale(log_y)
     spanned = pd.concat([frame[y_col], frame.get("yhat", pd.Series(dtype=float))])

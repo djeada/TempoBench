@@ -33,19 +33,23 @@ into `artifacts/cross_language/<algorithm>/`, then checks two things:
    print the same checksum at every input size.
 2. **Same class.** Every language must be fitted the expected class.
 
-It exits non-zero if either check fails. On a quiet machine every fit is the
-expected class, nearly all of them at high confidence:
+It exits non-zero if either check fails. A run on an otherwise idle machine:
 
 ```
-┃ Algorithm       ┃ Expected   ┃ cpp             ┃ rust            ┃ python          ┃ Checksums ┃
-│ binary_search   │ O(log n)   │ O(log n) high   │ O(log n) high   │ O(log n) high   │ match     │
-│ divisor_count   │ O(√n)      │ O(√n) high      │ O(√n) high      │ O(√n) high      │ match     │
-│ max_subarray    │ O(n)       │ O(n) high       │ O(n) high       │ O(n) high       │ match     │
-│ merge_sort      │ O(n log n) │ O(n log n) high │ O(n log n) high │ O(n log n) high │ match     │
-│ insertion_sort  │ O(n²)      │ O(n²) high      │ O(n²) high      │ O(n²) high      │ match     │
-│ matrix_multiply │ O(n³)      │ O(n³) high      │ O(n³) high      │ O(n³) high      │ match     │
-│ held_karp       │ O(n² 2^n)  │ O(n² 2^n) high  │ O(n² 2^n) high  │ O(n² 2^n) high  │ match     │
+┃ Algorithm       ┃ Expected   ┃ cpp             ┃ rust              ┃ python          ┃ Checksums ┃
+│ binary_search   │ O(log n)   │ O(log n) high   │ O(log n) high     │ O(log n) high   │ match     │
+│ divisor_count   │ O(√n)      │ O(√n) high      │ O(√n) high        │ O(√n) high      │ match     │
+│ max_subarray    │ O(n)       │ O(n) high       │ O(n) high         │ O(n) medium     │ match     │
+│ merge_sort      │ O(n log n) │ O(n log n) high │ O(n log n) medium │ O(n log n) high │ match     │
+│ insertion_sort  │ O(n²)      │ O(n²) high      │ O(n²) high        │ O(n²) high      │ match     │
+│ matrix_multiply │ O(n³)      │ O(n³) high      │ O(n³) high        │ O(n³) high      │ match     │
+│ held_karp       │ O(n² 2^n)  │ O(n² 2^n) high  │ O(n² 2^n) high    │ O(n² 2^n) high  │ match     │
 ```
+
+The two medium ratings give their reasons in `fits.csv`. For Rust's merge sort,
+repeated trials of one point disagreed (`unstable-timings`). For Python's
+max_subarray, O(n log n) fit almost as well (`ambiguous-class`). Which fits
+come out medium changes from run to run. The classes didn't change in any run.
 
 Each config can also be run on its own, like any other:
 

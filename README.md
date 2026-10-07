@@ -15,7 +15,7 @@ A language-agnostic benchmarking CLI that runs any command with parameter sweeps
 - **CI-ready exit codes** — a run in which trials failed, or a summary with nothing in it, exits non-zero instead of reporting success.
 - **Interactive charts** — Vega-Lite charts with click-to-toggle legend, crosshair tooltips, and smooth fit curves. Data points shown as discrete markers, fit lines as smooth interpolated curves. Every grid axis besides the input size gets its own series, and grid points where no trial succeeded (or values a log axis cannot show) are left out with a note on the chart rather than drawn as zero.
 - **Rich CLI output** — live progress bars, colored status tables, and system-info display powered by [Rich](https://github.com/Textualize/rich).
-- **Reports & dashboards** — a single-file HTML report with summary statistics, trial status counts, the runtime chart, the results table, the grid points that produced no measurement, complexity fits, and system information; a dashboard combining the runtime, memory, heatmap and per-size distribution charts; and a separate comparison report from `compare`. Chart data and styling are embedded; the Vega renderer loads from a CDN, so drawing charts needs network access.
+- **Reports & dashboards** — a single-file HTML report that leads with each series' complexity class and confidence, then trial status counts, the runtime chart, complexity fits, the results table, the grid points that produced no measurement, and system information; a dashboard combining the runtime, memory, heatmap and per-size distribution charts; and a comparison report from `compare` that leads with each point's verdict and change against the baseline. Pages follow the system's light or dark theme. Chart data and styling are embedded; the Vega renderer loads from a CDN, so drawing charts needs network access.
 - **Baseline comparison** — flag regressions against a previous run above a configurable threshold. Rows match on whatever grid columns the two summaries share, so any sweep works.
 - **Reproducibility** — a provenance snapshot records the seed, invocation, and the CPU/memory of the machine that ran the benchmark. Reports read it back, so a report built on your laptop still describes the CI runner that produced the numbers.
 
@@ -120,7 +120,13 @@ tembench report --summary artifacts/summary.csv
 | `heatmap`     | Generate a performance heatmap                             |
 | `sysinfo`     | Display system information for reproducibility             |
 
-Run `tembench --help` or `tembench <command> --help` for full option details. Every chart and report command takes its output path as `--out-html` (`--output` also works for `report`, `dashboard`, `memory` and `heatmap`).
+Run `tembench --help` or `tembench <command> --help` for full option details. Every chart and report command takes its output path as `--output` or `--out-html`, and `plot`, `dashboard`, `memory` and `heatmap` take `--bench` to chart one benchmark.
+
+Axes switch to a log scale on their own when the values span more than 30×, which
+timings across a sweep almost always do; `--log-x/--no-log-x` and
+`--log-y/--no-log-y` force either (the heatmap's colour scale: `--log-color/--no-log-color`).
+Every page follows the system's light or dark theme, with a toggle in the header,
+and a series keeps its colour across every chart.
 
 ### Arbitrary grids
 
@@ -329,7 +335,7 @@ All output is written to the `--out-dir` directory (default `artifacts/`):
 | `summary.csv`     | CSV    | Median/mean/p10/p90 per grid point, for both the canonical (`time_ms_*`) and wall-clock (`wall_ms_*`) durations |
 | `runtime.html`    | HTML   | Vega-Lite runtime chart with complexity overlay |
 | `fits.csv`        | CSV    | Best-fit model, runner-up and margin, exponent CI, coefficients, residuals, and confidence with its caveats per series |
-| `report.html`     | HTML   | Full report with charts, tables, and system info |
+| `report.html`     | HTML   | Self-contained report: per-series complexity cards, run overview, runtime chart drawn from the summary, fits, results, and system info |
 
 ## Complexity Fitting
 
