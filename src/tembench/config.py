@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import string
 from dataclasses import dataclass, field
+from itertools import product
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .placeholders import BUILTIN_PLACEHOLDER_NAMES
+from .placeholders import BUILTIN_PLACEHOLDER_NAMES, format_cmd
 
 #: How the per-trial duration used for summaries and complexity fitting is chosen.
 #:
@@ -61,7 +62,12 @@ def _template_fields(template: str) -> set[str]:
 
 
 def _validate_cmd_templates(benches: List[Benchmark], grid: Dict[str, List[Any]]) -> None:
-    """Ensure every placeholder referenced by a benchmark command can be expanded."""
+    """Ensure every benchmark command expands at every grid point.
+
+    A format spec that does not suit a value (``{n:05d}`` with ``n: "big"``)
+    would otherwise crash the sweep at that point, after the points before it
+    had already run.
+    """
     known = set(grid) | BUILTIN_PLACEHOLDER_NAMES
     for bench in benches:
         missing = sorted(_template_fields(bench.cmd) - known)
@@ -73,6 +79,16 @@ def _validate_cmd_templates(benches: List[Benchmark], grid: Dict[str, List[Any]]
                 f"{', '.join(missing)}. Available grid keys: {grid_keys}. "
                 f"Built-in placeholders: {builtins}"
             )
+        keys = list(grid)
+        for combo in product(*(grid[key] for key in keys)):
+            params = dict(zip(keys, combo))
+            try:
+                format_cmd(bench.cmd, params)
+            except (KeyError, IndexError, ValueError, TypeError, AttributeError) as e:
+                raise ValueError(
+                    f"Benchmark '{bench.name}' cmd {bench.cmd!r} cannot be expanded "
+                    f"at grid point {params}: {e}"
+                ) from None
 
 
 #: Grid axis names a summary already uses for something else.  An axis with one
@@ -82,6 +98,10 @@ def _validate_cmd_templates(benches: List[Benchmark], grid: Dict[str, List[Any]]
 #: config does not import pandas.
 RESERVED_AXIS_NAMES = frozenset(
     {"bench", "time_source", "ok", "failed", "timeout", "error", "skipped"}
+    # Fields of a trial record, which a grid axis would collide with when the
+    # records are flattened into a table.
+    | {"ts", "status", "rc", "wall_ms", "reported_ms", "peak_rss_mb", "stdout",
+       "stderr", "cmd", "params", "metric", "attempts", "time_ms"}
 )
 _METRIC_SUFFIXES = ("_median", "_mean", "_count", "_p10", "_p90")
 
@@ -104,6 +124,13 @@ def _validate_grid(path: Path, grid: Any) -> Dict[str, List[Any]]:
                 f"{path}: grid axis name {key!r} is reserved for summary columns; "
                 "rename it"
             )
+        for value in values:
+            # A grid value is one command argument and one table cell.
+            if value is not None and not isinstance(value, (str, int, float)):
+                raise ValueError(
+                    f"{path}: grid.{key} values must be numbers or strings "
+                    f"(got {value!r}); quote a value to pass it as text"
+                )
     empty_axes = sorted(str(key) for key, values in grid.items() if not values)
     if empty_axes:
         raise ValueError(
@@ -136,6 +163,8 @@ def _validate_limits(limits: Limits) -> None:
             "limits.rss_poll_interval_sec must be positive "
             f"(got {limits.rss_poll_interval_sec})"
         )
+    if limits.growth_key is not None and not isinstance(limits.growth_key, str):
+        raise ValueError(f"limits.growth_key must be a grid axis name (got {limits.growth_key!r})")
     if limits.metric not in METRICS:
         raise ValueError(
             f"limits.metric must be one of: {', '.join(METRICS)} (got {limits.metric!r})"
@@ -164,11 +193,31 @@ def _load_benchmark(path: Path, entry: Any) -> Benchmark:
     for required in ("name", "cmd"):
         if not isinstance(entry.get(required), str) or not entry[required].strip():
             raise ValueError(f"{path}: every benchmark needs a non-empty {required!r}")
+    name = entry["name"]
+    for optional in ("build", "workdir"):
+        if entry.get(optional) is not None and not isinstance(entry[optional], str):
+            raise ValueError(f"{path}: benchmark {name!r} {optional} must be a string")
     env = entry.get("env") or {}
     if not isinstance(env, dict):
-        raise ValueError(f"{path}: benchmark {entry['name']!r} env must be a mapping")
-    # A subprocess environment holds only strings; YAML reads `1` as an int.
-    return Benchmark(**{**entry, "env": {str(k): str(v) for k, v in env.items()}})
+        raise ValueError(f"{path}: benchmark {name!r} env must be a mapping")
+    return Benchmark(**{**entry, "env": {str(k): _env_value(path, name, k, v) for k, v in env.items()}})
+
+
+def _env_value(path: Path, bench: str, key: object, value: object) -> str:
+    """Render an env value as the string the child will see.
+
+    A subprocess environment holds only strings, but YAML reads `1` as an int,
+    `true` as a bool, and an empty value as null.
+    """
+    if value is None:
+        raise ValueError(
+            f"{path}: benchmark {bench!r} env.{key} has no value; write \"\" for an empty string"
+        )
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if not isinstance(value, (str, int, float)):
+        raise ValueError(f"{path}: benchmark {bench!r} env.{key} must be a string or number")
+    return str(value)
 
 
 def load_config(path: Path) -> Config:
@@ -179,6 +228,12 @@ def load_config(path: Path) -> Config:
     benches = [_load_benchmark(path, b) for b in data.get("benchmarks") or []]
     if not benches:
         raise ValueError(f"{path}: no benchmarks defined")
+    names = [bench.name for bench in benches]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        # Results are keyed by name, so two benchmarks sharing one would be
+        # silently merged into a single series.
+        raise ValueError(f"{path}: benchmark names must be unique: {', '.join(duplicates)}")
 
     grid = _validate_grid(path, data.get("grid"))
 

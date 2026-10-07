@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tembench"
-version = "0.2.0"
+version = "0.3.0"
 description = "Language-agnostic benchmarking orchestrator: run commands with parameter sweeps, record metrics, estimate complexity, and generate reports."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,7 +34,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# `tembench reel` draws its frames with matplotlib (and encodes with ffmpeg).
+reel = ["matplotlib>=3.7"]
 dev = [
+  "matplotlib>=3.7",
   "mypy>=1.10",
   "pandas-stubs>=2.2",
   "pytest>=7.0",

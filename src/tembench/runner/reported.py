@@ -18,6 +18,7 @@ last occurrence wins, so a program may report intermediate progress.
 
 from __future__ import annotations
 
+import math
 import re
 
 MARKER_NAME = "TEMPOBENCH_MS"
@@ -39,11 +40,10 @@ def parse_reported_ms(stdout: str | None) -> float | None:
     if not stdout or MARKER_NAME not in stdout:
         return None
 
+    # The pattern only matches plain non-negative decimals, but one with enough
+    # digits still overflows to inf.
     for match in reversed(_MARKER_RE.findall(stdout)):
-        try:
-            value = float(match)
-        except ValueError:
-            continue
-        if value == value and value not in (float("inf"), float("-inf")) and value >= 0:
+        value = float(match)
+        if math.isfinite(value):
             return value
     return None

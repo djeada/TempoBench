@@ -10,6 +10,7 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
+from ...summarize import read_jsonl
 from ..app import app, console
 
 
@@ -25,7 +26,7 @@ def inspect(
         10, "--count", "-n", min=1, help="Number of runs to show"
     ),
     status: Optional[str] = typer.Option(
-        None, help="Filter by status (ok, failed, timeout)"
+        None, help="Filter by status (ok, failed, error, timeout, skipped)"
     ),
 ):
     """Quickly preview recent runs with detailed statistics.
@@ -34,43 +35,31 @@ def inspect(
         tembench inspect --runs artifacts/runs.jsonl --count 5
         tembench inspect --status failed
     """
-    all_runs = []
-    with runs.open(encoding="utf-8") as f:
-        for line in f:
-            try:
-                all_runs.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-
+    all_runs = read_jsonl(runs)
     if not all_runs:
         console.print("[yellow]No runs found in the file.[/yellow]")
         return
 
-    # Filter by status if specified
-    filtered_runs = all_runs
-    if status:
-        filtered_runs = [r for r in all_runs if r.get("status") == status]
+    filtered_runs = [r for r in all_runs if r.get("status") == status] if status else all_runs
 
-    # Show statistics first
-    total = len(all_runs)
-    ok_count = sum(1 for r in all_runs if r.get("status") == "ok")
-    failed_count = sum(1 for r in all_runs if r.get("status") == "failed")
-    timeout_count = sum(1 for r in all_runs if r.get("status") == "timeout")
-    error_count = sum(1 for r in all_runs if r.get("status") == "error")
+    counts: dict[str, int] = {}
+    for rec in all_runs:
+        counts[str(rec.get("status"))] = counts.get(str(rec.get("status")), 0) + 1
 
     console.print()
     stats_table = Table(show_header=False, box=None, padding=(0, 2))
     stats_table.add_column("", style="dim")
     stats_table.add_column("", style="bold")
-    stats_table.add_row("Total Runs", str(total))
-    stats_table.add_row("Successful", f"[green]{ok_count}[/green]")
-    stats_table.add_row(
-        "Failed", f"[red]{failed_count}[/red]" if failed_count > 0 else "0"
-    )
-    stats_table.add_row("Errors", f"[red]{error_count}[/red]" if error_count > 0 else "0")
-    stats_table.add_row(
-        "Timeouts", f"[yellow]{timeout_count}[/yellow]" if timeout_count > 0 else "0"
-    )
+    stats_table.add_row("Total Runs", str(len(all_runs)))
+    stats_table.add_row("Successful", f"[green]{counts.get('ok', 0)}[/green]")
+    for label, key, style in (
+        ("Failed", "failed", "red"),
+        ("Errors", "error", "red"),
+        ("Timeouts", "timeout", "yellow"),
+        ("Skipped", "skipped", "yellow"),
+    ):
+        value = counts.get(key, 0)
+        stats_table.add_row(label, f"[{style}]{value}[/{style}]" if value else "0")
 
     console.print(Panel(stats_table, title="Run Statistics", border_style="blue"))
     console.print()

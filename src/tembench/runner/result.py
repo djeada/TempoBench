@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+import json
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import IO, Literal
 
 TrialStatus = Literal["ok", "failed", "timeout", "error", "skipped"]
 
@@ -105,3 +106,24 @@ class TrialResult(Mapping[str, object]):
 
     def __len__(self) -> int:
         return len(self.to_dict())
+
+
+#: Progress callback: (bench name, grid point, repetition, repetitions, result).
+TrialCallback = Callable[[str, dict[str, object], int, int, TrialResult], None]
+
+
+class ResultWriter:
+    """Append trial records to runs.jsonl as they finish, and report progress."""
+
+    def __init__(self, handle: IO[str], repeats: int, on_trial: TrialCallback | None):
+        self._handle = handle
+        self._repeats = repeats
+        self._on_trial = on_trial
+
+    def emit(self, bench: str, params: dict[str, object], results: list[TrialResult]) -> None:
+        for i, rec in enumerate(results):
+            # Flushed per record, so a sweep that is interrupted keeps its data.
+            self._handle.write(json.dumps(rec.to_dict()) + "\n")
+            self._handle.flush()
+            if self._on_trial:
+                self._on_trial(bench, params, i + 1, self._repeats, rec)

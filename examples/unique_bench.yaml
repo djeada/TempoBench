@@ -7,10 +7,10 @@ benchmarks:
     env: {}
 
 grid:
-  # Five sizes spanning 100x: enough to separate neighbouring complexity
-  # classes, and small enough that the whole sweep finishes in a couple of
-  # minutes even though `quadratic` hits the timeout wall near the top.
-  n: [10000, 50000, 100000, 500000, 1000000]
+  # Sizes spanning 500x.  `quadratic` hits the timeout wall near 100k and the
+  # rest of its sweep is pruned, so the small sizes are what give it enough
+  # points to fit; the fast implementations use the whole range.
+  n: [2000, 5000, 10000, 20000, 50000, 100000, 500000, 1000000]
   impl: ["quadratic", "sort_scan", "hash_set"]
 
 limits:

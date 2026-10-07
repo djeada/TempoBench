@@ -84,7 +84,7 @@ _SELECT_CASES: Sequence[tuple[str, list[float], list[float], str]] = [
     ("n2_large_base_5pt", [100, 500, 1000, 5000, 10000], [1000 + 0.001 * n ** 2 for n in [100, 500, 1000, 5000, 10000]], "O(n²)"),
     ("nlogn_noisy", [100, 500, 1000, 5000, 10000],
      [n * math.log(n) * (1 + 0.03 * (-1) ** i) for i, n in enumerate([100, 500, 1000, 5000, 10000])], "O(n log n)"),
-    ("exp_like_4pt", [1, 2, 3, 4], [2, 4, 8, 16], "O(n³)"),
+    ("exp_like_4pt", [1, 2, 3, 4], [2, 4, 8, 16], "O(2^n)"),
     ("n2_w_noise_5pt", [100, 500, 1000, 5000, 10000],
      [n ** 2 + 500 * (-1) ** i for i, n in enumerate([100, 500, 1000, 5000, 10000])], "O(n²)"),
 ]

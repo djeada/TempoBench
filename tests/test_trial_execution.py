@@ -271,3 +271,65 @@ def test_a_failing_build_fails_the_run(tmp_path: Path, workers: str):
     assert {r["status"] for r in records} == {"error"}
     assert "exit 3" in records[0]["stderr"] and "no such file" in records[0]["stderr"]
     assert "build step" in result.output
+
+
+# ---------- audit regressions ----------
+
+
+def test_marker_is_found_however_much_is_printed_after_it(tmp_path: Path):
+    # Only the tail of stdout is kept; the marker must not be lost with the rest.
+    prog = _script(tmp_path, f"""
+        print("TEMPOBENCH_MS: 1.5")
+        print("x" * {OUTPUT_TAIL_BYTES * 3})
+    """)
+    result = run_once(f"{PY} {prog}", {}, None, timeout=10.0)
+    assert result.status == "ok"
+    assert result.reported_ms == 1.5
+    assert len(result.stdout or "") <= OUTPUT_TAIL_BYTES
+
+
+@posix_only
+def test_timeout_does_not_wait_for_the_next_memory_sample():
+    started = time.perf_counter()
+    result = run_once("sleep 5", {}, None, timeout=0.2, poll_interval_sec=2.0)
+    assert result.status == "timeout"
+    assert time.perf_counter() - started < 1.5
+
+
+@pytest.mark.skipif(not hasattr(os, "sched_setaffinity"), reason="Linux CPU affinity")
+def test_pin_cpu_pins_the_benchmark_but_not_the_runner(tmp_path: Path):
+    cpu = max(os.sched_getaffinity(0))
+    before = os.sched_getaffinity(0)
+    prog = _script(tmp_path, "import os; print('CPUS', sorted(os.sched_getaffinity(0)))")
+    result = run_once(f"{PY} {prog}", {}, None, timeout=10.0, cpu=cpu)
+    assert f"CPUS [{cpu}]" in (result.stdout or "")
+    assert os.sched_getaffinity(0) == before
+
+
+@pytest.mark.skipif(not hasattr(os, "sched_setaffinity"), reason="Linux CPU affinity")
+def test_unavailable_pin_cpu_is_a_config_error(tmp_path: Path):
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("benchmarks:\n  - name: b\n    cmd: 'true'\npin_cpu: 4096\n")
+    result = CliRunner().invoke(app, ["run", "--config", str(cfg), "--out-dir", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "CPU 4096 is not available" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_invalid_config_is_reported_without_a_traceback(tmp_path: Path):
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("benchmarks:\n  - name: b\n    cmd: 'echo {nope}'\n")
+    for command in ("run", "validate"):
+        result = CliRunner().invoke(app, [command, "--config", str(cfg)])
+        assert result.exit_code == 1
+        assert "Invalid config" in result.output and "nope" in result.output
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_windows_quoting_doubles_backslashes_before_a_closing_quote(monkeypatch):
+    from tembench import command
+
+    monkeypatch.setattr(command, "WINDOWS", True)
+    assert command.quote_argument("C:\\a b\\") == '"C:\\a b\\\\"'
+    assert command.quote_argument("plain") == "plain"
+    assert command.quote_argument("") == '""'

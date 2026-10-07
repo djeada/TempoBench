@@ -147,6 +147,11 @@ def test_limits_defaults():
         ("grid:\n  n: [1]\nlimits:\n  timeout_sec: '30'\n", "a number"),
         ("grid:\n  n: [1]\nlimits:\n  repeat: 5\n", "unknown limits key"),
         ("grid:\n  n: [1]\npin_cpu: first\n", "pin_cpu"),
+        # Trial record fields: they would collide with the axis in a summary.
+        ("grid:\n  status: [1, 2]\n", "reserved"),
+        ("grid:\n  metric: [a]\n", "reserved"),
+        ("grid:\n  n: [[1, 2], [3]]\n", "numbers or strings"),
+        ("grid:\n  n: [1, 'big']\nlimits:\n  growth_key: 3\n", "growth_key"),
     ],
 )
 def test_nonsense_is_rejected_with_a_clear_message(tmp_path: Path, body: str, message: str):
@@ -168,3 +173,53 @@ def test_env_values_become_strings(tmp_path: Path):
     p = tmp_path / "c.yaml"
     p.write_text("benchmarks:\n  - name: b\n    cmd: 'true'\n    env: {THREADS: 4}\n")
     assert load_config(p).benchmarks[0].env == {"THREADS": "4"}
+
+
+def _config(tmp_path: Path, text: str) -> Path:
+    p = tmp_path / "c.yaml"
+    p.write_text(text)
+    return p
+
+
+@pytest.mark.parametrize(
+    "cmd, grid",
+    [
+        ("echo {n:05d}", "n: [1, 'big']"),  # format spec unsuited to one value
+        ("echo {}", "n: [1]"),  # positional field
+        ("echo {n.real.nope}", "n: [1]"),
+    ],
+)
+def test_command_must_expand_at_every_grid_point(tmp_path: Path, cmd: str, grid: str):
+    # Checked up front: otherwise the sweep crashes at that point, after the
+    # points before it have already run.
+    p = _config(tmp_path, f"benchmarks:\n  - name: b\n    cmd: '{cmd}'\ngrid:\n  {grid}\n")
+    with pytest.raises(ValueError, match="cannot be expanded"):
+        load_config(p)
+
+
+def test_builtin_placeholders_accept_raw(tmp_path: Path):
+    p = _config(tmp_path, "benchmarks:\n  - name: b\n    cmd: '{python:raw} -V'\n")
+    assert load_config(p).benchmarks[0].cmd == "{python:raw} -V"
+
+
+def test_duplicate_benchmark_names_are_rejected(tmp_path: Path):
+    p = _config(
+        tmp_path,
+        "benchmarks:\n  - name: a\n    cmd: 'true'\n  - name: a\n    cmd: 'false'\n",
+    )
+    with pytest.raises(ValueError, match="unique: a"):
+        load_config(p)
+
+
+def test_env_booleans_are_lowercase_and_nulls_rejected(tmp_path: Path):
+    p = _config(tmp_path, "benchmarks:\n  - name: b\n    cmd: 'true'\n    env: {A: true, B: 1.5}\n")
+    assert load_config(p).benchmarks[0].env == {"A": "true", "B": "1.5"}
+    p = _config(tmp_path, "benchmarks:\n  - name: b\n    cmd: 'true'\n    env: {A: }\n")
+    with pytest.raises(ValueError, match="env.A has no value"):
+        load_config(p)
+
+
+def test_build_must_be_a_string(tmp_path: Path):
+    p = _config(tmp_path, "benchmarks:\n  - name: b\n    cmd: 'true'\n    build: true\n")
+    with pytest.raises(ValueError, match="build must be a string"):
+        load_config(p)

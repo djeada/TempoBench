@@ -1,71 +1,73 @@
 from __future__ import annotations
 
+import html
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
 
 import altair as alt
 
-from ..reporting.resources import json_for_script, vega_script_tags
-
-# Altair's own HTML export embeds the spec unescaped, so a benchmark named
-# "</script>…" would break out of the page's script; this page escapes it.
-_PAGE = """<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    #vis.vega-embed {{ width: 100%; display: flex; }}
-    #vis.vega-embed details, #vis.vega-embed details summary {{ position: relative; }}
-  </style>
-{scripts}
-</head>
-<body>
-  <div id="vis"></div>
-  <script>
-    (function(vegaEmbed) {{
-      var spec = {spec};
-      var embedOpt = {{"mode": "vega-lite"}};
-      vegaEmbed("#vis", spec, embedOpt).catch(function(err) {{
-        var pre = document.createElement("pre");
-        pre.textContent = "Error rendering chart: " + err;
-        document.getElementById("vis").appendChild(pre);
-      }});
-    }})(vegaEmbed);
-  </script>
-</body>
-</html>
-"""
+from ..reporting.resources import chart_slot, render_page
 
 
-def chart_html(chart: alt.TopLevelMixin) -> str:
-    """A standalone HTML page rendering `chart`, safe for any data it holds."""
-    spec = json_for_script(chart.to_json(indent=None))
-    return _PAGE.format(scripts=vega_script_tags(), spec=spec)
+def is_wide(chart: alt.TopLevelMixin) -> bool:
+    """Whether `chart` has to keep a fixed width (facets and concatenations)."""
+    return not isinstance(chart, (alt.Chart, alt.LayerChart))
+
+
+def responsive(chart: alt.TopLevelMixin) -> alt.TopLevelMixin:
+    """Let a single-view chart fill the width of whatever holds it.
+
+    Vega-Lite can only size single and layered views to their container; a
+    faceted or stacked chart keeps its fixed width.
+    """
+    if is_wide(chart):
+        return chart
+    return chart.properties(
+        width="container",
+        autosize=alt.AutoSizeParams(type="fit-x", contains="padding"),
+    )
+
+
+def chart_sections(charts: Sequence[alt.TopLevelMixin], start: int = 0) -> tuple[str, list[dict]]:
+    """Page sections holding `charts`, and the specs to render into them.
+
+    `start` numbers the slots, for a page that already holds other charts.
+    """
+    sections = []
+    specs = []
+    for i, chart in enumerate(charts, start=start):
+        sections.append(
+            f'<section class="section chart-section">{chart_slot(i, is_wide(chart))}</section>'
+        )
+        specs.append(responsive(chart).to_dict())
+    return "\n".join(sections), specs
+
+
+def chart_page(
+    charts: Sequence[alt.TopLevelMixin], title: str, kind: str = "Chart", meta: str = ""
+) -> str:
+    """A standalone HTML page rendering `charts`, safe for any data they hold.
+
+    `meta` is plain text shown under the title.
+    """
+    body, specs = chart_sections(charts)
+    return render_page(title=title, kind=kind, meta=html.escape(meta), body=body, specs=specs)
+
+
+def chart_html(chart: alt.TopLevelMixin, title: str = "TempoBench chart") -> str:
+    """A standalone HTML page rendering `chart`."""
+    return chart_page([chart], title)
 
 
 def save_chart(
-    chart: alt.TopLevelMixin,
+    chart: alt.TopLevelMixin | Sequence[alt.TopLevelMixin],
     output_path: Path,
-    fmt: Literal["html", "json", "png", "svg"] = "html",
+    title: str = "TempoBench chart",
+    kind: str = "Chart",
+    meta: str = "",
 ) -> str:
-    """Save chart to file. Supports html, json, png, svg."""
+    """Write `chart` (or several, one per section) as a standalone HTML page."""
+    charts = [chart] if isinstance(chart, alt.TopLevelMixin) else list(chart)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if fmt == "html":
-        output_path.write_text(chart_html(chart), encoding="utf-8")
-        return str(output_path)
-    if fmt == "json":
-        with output_path.open("w", encoding="utf-8") as f:
-            f.write(chart.to_json())
-        return str(output_path)
-    if fmt in ("png", "svg"):
-        try:
-            chart.save(output_path, format=fmt)
-            return str(output_path)
-        except Exception:
-            html_path = output_path.with_suffix(".html")
-            html_path.write_text(chart_html(chart), encoding="utf-8")
-            return str(html_path)
-    raise ValueError(
-        f"Unsupported format: {fmt}. Use 'html', 'json', 'png', or 'svg'."
-    )
+    output_path.write_text(chart_page(charts, title, kind, meta), encoding="utf-8")
+    return str(output_path)

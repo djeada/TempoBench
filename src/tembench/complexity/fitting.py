@@ -17,33 +17,12 @@ _CONST_RHO_MAX = 0.6
 _EXPONENT_BOOTSTRAP_SAMPLES = 200
 # Relative residuals below this are timer resolution, not model misfit.
 _REL_RESIDUAL_FLOOR = 1e-4
-
-
-def _ols_fit(
-    x: List[float], y: List[float], basis: Callable[[float], float]
-) -> tuple[float, float, float]:
-    """Fit y = C·f(n) + baseline via OLS.  Returns (C, baseline, rss)."""
-    n = len(x)
-    if n < 2:
-        return 0.0, 0.0, float("inf")
-
-    F = [basis(xi) for xi in x]
-    sum_f = sum(F)
-    sum_y = sum(y)
-    sum_ff = sum(fi * fi for fi in F)
-    sum_fy = sum(fi * yi for fi, yi in zip(F, y))
-
-    denom = n * sum_ff - sum_f * sum_f
-    if abs(denom) < 1e-30:
-        # A constant basis leaves only the intercept: the mean, with the
-        # residuals around it — not an infinite RSS.
-        mean = sum_y / n
-        return 0.0, mean, sum((yi - mean) ** 2 for yi in y)
-
-    C = (n * sum_fy - sum_f * sum_y) / denom
-    baseline = (sum_y - C * sum_f) / n
-    rss = sum((yi - (C * fi + baseline)) ** 2 for fi, yi in zip(F, y))
-    return C, baseline, rss
+# Deepest negative intercept a fit may use, as a fraction of the smallest
+# reading.  Overhead is never negative, but cost per element often rises a
+# little with n (small inputs stay in cache), which a slightly negative
+# intercept absorbs.  Forbidding it outright turned such O(n) series into
+# O(n log n); allowing any depth let O(n) pass for O(n log n).
+_MAX_NEGATIVE_BASELINE = 0.25
 
 
 def _relative_scales(y: List[float]) -> List[float]:
@@ -94,11 +73,19 @@ def _wls_fit(
 
     # Degenerate (constant) basis, judged relative to the basis's own weighted
     # magnitude so that tiny weights on huge timings do not trip it.
-    if s_ff <= 1e-12 * sum(wi * fi * fi for wi, fi in zip(w, F)):
+    s_f2 = sum(wi * fi * fi for wi, fi in zip(w, F))
+    if s_ff <= 1e-12 * s_f2:
         C, baseline = 0.0, y_mean
     else:
         C = s_fy / s_ff
         baseline = y_mean - C * f_mean
+        floor = -_MAX_NEGATIVE_BASELINE * min(y)
+        if baseline < floor:
+            # A large negative intercept is how a class that grows too slowly
+            # imitates a faster one over a finite range (C·n − b passing for
+            # n·log n), so the intercept is held at the floor and C refitted.
+            C = sum(wi * fi * (yi - floor) for wi, fi, yi in zip(w, F, y)) / s_f2
+            baseline = floor
     sse = sum(
         ((yi - (C * fi + baseline)) / si) ** 2 for fi, yi, si in zip(F, y, scales)
     )
@@ -371,11 +358,6 @@ def _tail_ratio_favors_simpler(
     return abs(math.log(observed / expected_simpler)) <= abs(
         math.log(observed / expected_complexer)
     )
-
-
-def _tail_ratio_favors_linear(x: List[float], y: List[float]) -> bool:
-    """Backward-compatible wrapper for the O(n) vs O(n log n) tail check."""
-    return _tail_ratio_favors_simpler(x, y, "O(n)", "O(n log n)")
 
 
 def _upper_bound_scale(

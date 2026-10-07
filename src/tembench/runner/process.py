@@ -8,6 +8,8 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any
@@ -26,11 +28,11 @@ from .process_group import (
     popen_process_group_kwargs,
     terminate_process_group,
 )
-from .reported import parse_reported_ms
+from .reported import MARKER_NAME, parse_reported_ms
 from .result import TrialResult, TrialStatus
 
-#: How much of each output stream is kept.  Only the tail matters: it holds the
-#: self-reported timing and the last error message.
+#: How much of each output stream is kept.  The tail holds the last error
+#: message; the self-reported timing is looked for in the whole of stdout.
 OUTPUT_TAIL_BYTES = 10000
 
 #: Descendants are looked for at most this often.  Finding them means scanning
@@ -180,6 +182,37 @@ def _read_tail(handle: IO[bytes]) -> str:
     return data.decode("utf-8", errors="replace").replace("\r\n", "\n")
 
 
+def _find_reported_ms(handle: IO[bytes]) -> float | None:
+    """Return the self-reported duration from anywhere in a captured stdout.
+
+    Only the tail of the output is kept, but a program may print plenty after
+    its marker; reading the marker from the tail alone would quietly fall
+    back to wall clock for exactly the inputs that print the most.
+    """
+    marker = MARKER_NAME.encode()
+    handle.seek(0)
+    lines = [line for line in handle if marker in line]
+    return parse_reported_ms(b"".join(lines).decode("utf-8", errors="replace")) if lines else None
+
+
+@contextmanager
+def _spawn_affinity(cpu: int | None) -> Iterator[None]:
+    """Spawn on `cpu` alone: the child inherits the spawning thread's CPU mask.
+
+    Only the child is pinned.  Pinning the runner as well would put its
+    sampling threads on the very core the benchmark is meant to have to itself.
+    """
+    if cpu is None or not hasattr(os, "sched_setaffinity"):
+        yield
+        return
+    previous = os.sched_getaffinity(0)
+    os.sched_setaffinity(0, {cpu})
+    try:
+        yield
+    finally:
+        os.sched_setaffinity(0, previous)
+
+
 def _error(ts: str, message: str) -> TrialResult:
     return TrialResult(ts=ts, status="error", rc=None, stdout="", stderr=message)
 
@@ -190,7 +223,9 @@ def run_once(
     cwd: Path | None,
     timeout: float | None,
     poll_interval_sec: float = 0.01,
+    cpu: int | None = None,
 ) -> TrialResult:
+    """Run `cmd` once; `cpu` pins the process (Linux) to that core."""
     ts = datetime.now(timezone.utc).isoformat()
     try:
         argv = split_command(cmd)
@@ -212,7 +247,8 @@ def run_once(
             popen_kwargs.update(popen_process_group_kwargs())
             start = time.perf_counter()
             try:
-                proc = subprocess.Popen(argv, **popen_kwargs)
+                with _spawn_affinity(cpu):
+                    proc = subprocess.Popen(argv, **popen_kwargs)
             except (OSError, ValueError) as e:
                 # Missing program, no execute permission, bad cwd, NUL in args...
                 return _error(ts, str(e))
@@ -221,11 +257,16 @@ def run_once(
                 watcher = _ExitWatcher(proc)
                 memory = _MemorySampler(proc.pid, start, sleep_interval)
                 try:
+                    deadline = None if timeout is None else start + timeout
                     while True:
-                        memory.sample(time.perf_counter())
-                        if watcher.wait(sleep_interval):
+                        now = time.perf_counter()
+                        memory.sample(now)
+                        # Never sleep past the deadline, however coarse the
+                        # memory sampling is.
+                        wait = sleep_interval if deadline is None else min(sleep_interval, max(0.0, deadline - now))
+                        if watcher.wait(wait):
                             break
-                        if timeout is not None and time.perf_counter() - start > timeout:
+                        if deadline is not None and time.perf_counter() >= deadline:
                             status = "timeout"
                             terminate_process_group(proc, wait_exit=watcher.wait)
                             break
@@ -246,10 +287,10 @@ def run_once(
 
             stdout_data = _read_tail(out_handle)
             stderr_data = _read_tail(err_handle)
+            if rc not in (0, None) and status == "ok":
+                status = "failed"
+            reported_ms = _find_reported_ms(out_handle) if status == "ok" else None
 
-    if rc not in (0, None) and status == "ok":
-        status = "failed"
-    reported_ms = parse_reported_ms(stdout_data) if status == "ok" else None
     peak_rss = max(memory.peak, watcher.maxrss_bytes)
     return TrialResult(
         ts=ts,

@@ -44,7 +44,7 @@ def test_plot_runtime_bench_filter_disables_facet(tmp_path: Path):
     assert "facet" not in spec
 
 
-def test_plot_runtime_uses_zero_based_axes(tmp_path: Path):
+def test_plot_runtime_starts_durations_at_zero(tmp_path: Path):
     summary = _write_summary(
         tmp_path / "summary.csv",
         [
@@ -55,11 +55,11 @@ def test_plot_runtime_uses_zero_based_axes(tmp_path: Path):
     chart = plot_runtime(summary, bench="a", show_fit=False)
     spec = chart.to_dict()
     base_enc = spec["layer"][0]["encoding"]
-    assert base_enc["x"]["scale"]["zero"] is True
+    assert base_enc["x"]["scale"]["zero"] is False  # sizes start at the data
     assert base_enc["y"]["scale"]["zero"] is True
 
 
-def test_plot_memory_uses_zero_based_axes(tmp_path: Path):
+def test_plot_memory_starts_memory_at_zero(tmp_path: Path):
     summary = _write_summary(
         tmp_path / "summary.csv",
         [
@@ -69,7 +69,7 @@ def test_plot_memory_uses_zero_based_axes(tmp_path: Path):
     )
     chart = plot_memory(summary)
     spec = chart.to_dict()
-    assert spec["encoding"]["x"]["scale"]["zero"] is True
+    assert spec["encoding"]["x"]["scale"]["zero"] is False  # sizes start at the data
     assert spec["encoding"]["y"]["scale"]["zero"] is True
 
 
@@ -99,7 +99,7 @@ def test_plot_runtime_uses_log_y_scale(tmp_path: Path):
     chart = plot_runtime(summary, bench="a", show_fit=False, log_y=True)
     spec = chart.to_dict()
     base_enc = spec["layer"][0]["encoding"]
-    assert base_enc["x"]["scale"]["zero"] is True
+    assert base_enc["x"]["scale"]["zero"] is False  # sizes start at the data
     assert base_enc["y"]["scale"]["type"] == "log"
 
 
@@ -127,7 +127,7 @@ def test_plot_memory_uses_log_y_scale(tmp_path: Path):
     )
     chart = plot_memory(summary, log_y=True)
     spec = chart.to_dict()
-    assert spec["encoding"]["x"]["scale"]["zero"] is True
+    assert spec["encoding"]["x"]["scale"]["zero"] is False  # sizes start at the data
     assert spec["encoding"]["y"]["scale"]["type"] == "log"
 
 

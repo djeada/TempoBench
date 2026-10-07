@@ -16,9 +16,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from ...config import load_config
 from ...runner import expand_grid, run_benchmarks
-from ..app import app, console, fail, print_artifact, print_heading
+from ..app import app, console, fail, load_config_or_fail, print_artifact, print_heading
 
 #: Statuses that always indicate a broken setup or a crashing command.
 _BROKEN_STATUSES = ("error", "failed")
@@ -68,22 +67,25 @@ def run(
     [bold]Example:[/bold]
         tembench run --config examples/unique_bench.yaml --out-dir artifacts
     """
-    cfg = load_config(config)
-    # CLI --workers overrides config; 0 means use config value
-    if workers > 0:
-        cfg.limits.workers = workers
+    if workers < 0:
+        raise fail("--workers must not be negative.")
+    if retries < 0:
+        raise fail("--retries must not be negative.")
+    # --workers overrides the config; 0 keeps the config's value.
+    cfg = load_config_or_fail(config, workers=workers or None)
     out_dir.mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "runs.jsonl"
     initial_size = results_path.stat().st_size if append and results_path.exists() else 0
 
+    points = len(expand_grid(cfg.grid))
+    total_trials = len(cfg.benchmarks) * points * cfg.limits.repeats
     started = time.perf_counter()
     if not quiet:
-        points = len(expand_grid(cfg.grid))
         print_heading(
             "Running Benchmarks",
             config=config,
             output=out_dir,
-            plan=f"{len(cfg.benchmarks)} benchmark(s) x {points} grid point(s) x {max(1, cfg.limits.repeats)} repeat(s)",
+            plan=f"{len(cfg.benchmarks)} benchmark(s) x {points} grid point(s) x {cfg.limits.repeats} repeat(s)",
             workers=cfg.limits.workers,
         )
         if cfg.limits.workers > 1:
@@ -91,10 +93,6 @@ def run(
                 f"[dim]Workers:[/dim] {cfg.limits.workers}  [yellow]⚠ parallel mode — timings may have cross-talk[/yellow]"
             )
         console.print()
-
-    total_trials = (
-        len(cfg.benchmarks) * len(expand_grid(cfg.grid)) * max(1, cfg.limits.repeats)
-    )
 
     if not quiet:
         progress = Progress(
