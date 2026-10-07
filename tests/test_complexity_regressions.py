@@ -64,11 +64,12 @@ def test_real_cache_bound_series_is_n_log_n_not_quadratic(series):
     assert row["model"] == "O(n log n)"
     assert row["runner_up"] != "O(n²)"
     # The bound comes from the same relative fit, so it is tight at small n
-    # too — not a curve 30x above the first reading.  It cannot be tighter:
-    # these grow faster than n·log n, and overhead is never fitted negative.
+    # too — not a curve 30x above the first reading.  (A little looser than it
+    # could be: these grow faster than n·log n, and the intercept that would
+    # absorb that may only dip slightly below zero.)
     fn = _basis_functions()[row["model"]]
     first = row["C"] * fn(x[0]) + row["baseline"] + row["offset"]
-    assert y[0] <= first < 3 * y[0]
+    assert y[0] <= first < 2.5 * y[0]
     assert _bound_covers(row, x, y)
 
 
@@ -95,12 +96,20 @@ def test_exponent_is_measured_net_of_fitted_overhead():
 
 
 def test_negative_overhead_cannot_disguise_a_slower_class():
-    # C·n − b imitates n·log n over a finite range; overhead is never negative.
+    # C·n − b imitates n·log n over a finite range; the intercept may only dip
+    # a little below zero.
     x = _geomspace(1e3, 1e6, 8)
     y = [v * math.log(v) * 1e-6 for v in x]
     _, baseline, _ = _wls_fit(x, y, _basis_functions()["O(n)"])
-    assert baseline == 0.0
+    assert baseline == pytest.approx(-0.25 * min(y))
     assert _select_model(x, y) == "O(n log n)"
+
+
+def test_per_element_cost_rising_slightly_is_still_linear():
+    # Small inputs staying in cache: 20% cheaper per element at the low end.
+    x = [100, 500, 2500, 12500, 62500]
+    y = [v * (1.0 - 0.2 * math.log(x[-1] / v) / math.log(x[-1] / x[0])) for v in x]
+    assert _select_model(x, y) == "O(n)"
 
 
 def test_log_class_band_follows_its_local_exponent_at_small_n():

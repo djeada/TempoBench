@@ -17,6 +17,12 @@ _CONST_RHO_MAX = 0.6
 _EXPONENT_BOOTSTRAP_SAMPLES = 200
 # Relative residuals below this are timer resolution, not model misfit.
 _REL_RESIDUAL_FLOOR = 1e-4
+# Deepest negative intercept a fit may use, as a fraction of the smallest
+# reading.  Overhead is never negative, but cost per element often rises a
+# little with n (small inputs stay in cache), which a slightly negative
+# intercept absorbs.  Forbidding it outright turned such O(n) series into
+# O(n log n); allowing any depth let O(n) pass for O(n log n).
+_MAX_NEGATIVE_BASELINE = 0.25
 
 
 def _relative_scales(y: List[float]) -> List[float]:
@@ -73,12 +79,13 @@ def _wls_fit(
     else:
         C = s_fy / s_ff
         baseline = y_mean - C * f_mean
-        if baseline < 0:
-            # Overhead cannot be negative.  A negative intercept is how a class
-            # that grows too slowly imitates a faster one over a finite range
-            # (C·n − b passing for n·log n), so it is refitted through zero.
-            C = sum(wi * fi * yi for wi, fi, yi in zip(w, F, y)) / s_f2
-            baseline = 0.0
+        floor = -_MAX_NEGATIVE_BASELINE * min(y)
+        if baseline < floor:
+            # A large negative intercept is how a class that grows too slowly
+            # imitates a faster one over a finite range (C·n − b passing for
+            # n·log n), so the intercept is held at the floor and C refitted.
+            C = sum(wi * fi * (yi - floor) for wi, fi, yi in zip(w, F, y)) / s_f2
+            baseline = floor
     sse = sum(
         ((yi - (C * fi + baseline)) / si) ** 2 for fi, yi, si in zip(F, y, scales)
     )
