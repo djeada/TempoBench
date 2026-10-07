@@ -16,6 +16,7 @@ from typing import Sequence
 
 from .fitting import _is_effectively_constant
 from .formatting import _MODEL_SLOPE_INTERVALS
+from .models import EXPONENTIAL_MODELS
 
 #: Fewer points than this cannot separate neighbouring complexity classes.
 MIN_POINTS = 4
@@ -34,13 +35,19 @@ MAX_RELATIVE_SPREAD = 0.5
 MIN_SAMPLES = 3
 #: AIC lead the chosen class needs over the next one to count as decided.
 #: Two is the textbook threshold for a single comparison, but every fit here
-#: is a contest between seven classes on a handful of points: on synthetic
+#: is a contest between nine classes on a handful of points: on synthetic
 #: sweeps a wrong class led by 2-6 about as often as a right one, while a lead
 #: of six ("strong" evidence) was almost never wrong.
 MIN_MODEL_MARGIN = 6.0
-#: Fitted overhead below this share of the smallest reading is too little to
-#: depress the measured exponent, so it cannot excuse one too low for the class.
-_OVERHEAD_FREE_SHARE = 0.05
+#: With fewer input sizes than `SHORT_SWEEP_POINTS` the noise level itself is
+#: poorly estimated, which inflates every AIC lead; a short sweep has to win by
+#: `SHORT_SWEEP_MARGIN` instead.  On synthetic 4-5 point sweeps a lead of 6-10
+#: still picked n over n·log n (or the reverse) wrongly about one time in eight.
+SHORT_SWEEP_POINTS = 6
+SHORT_SWEEP_MARGIN = 10.0
+#: Typical relative miss of the best curve above which no candidate class
+#: describes the data — growth faster than any class, or a curve with a kink.
+MAX_RELATIVE_ERROR = 0.2
 
 _NOTE_TEXT = {
     "few-points": f"fewer than {MIN_POINTS} input sizes",
@@ -50,8 +57,10 @@ _NOTE_TEXT = {
     f"{MAX_EXPONENT_CI_WIDTH:g}",
     "overhead-dominated": "more than "
     f"{MAX_OVERHEAD_SHARE:.0%} of the largest reading is constant overhead",
-    "ambiguous-class": "another class fits almost as well "
-    f"(AIC lead under {MIN_MODEL_MARGIN:g})",
+    "ambiguous-class": "another class fits almost as well",
+    "poor-fit": f"even the best class misses the readings by over {MAX_RELATIVE_ERROR:.0%}",
+    "constant-class": "a flat curve is also what a sweep that never reached "
+    "large enough inputs looks like",
     "exponent-mismatch": "the measured growth exponent lies outside the range "
     "this class produces",
     "single-point-growth": "all of the growth comes from the largest input "
@@ -108,29 +117,19 @@ def _class_exponent_band(model: str, x: Sequence[float]) -> tuple[float, float]:
 
 
 def _exponent_contradicts_class(
-    model: str,
-    x: Sequence[float],
-    y: Sequence[float],
-    ci_low: float,
-    ci_high: float,
-    fitted_baseline: float,
+    model: str, x: Sequence[float], ci_low: float, ci_high: float
 ) -> bool:
     """Return True when the bootstrap exponent interval rules the class out.
 
     Growth between two classes — cache and memory effects bending a curve —
-    fits the nearer class best without the class describing the data.  A
-    constant overhead flattens the raw exponent, so an exponent *below* the
-    class band only counts against it when the fit found no overhead that could
-    explain it.
+    fits the nearer class best without the class describing the data.  The
+    exponent is measured net of the fitted overhead, so a constant cannot
+    explain one that is too low.
     """
     if model == "O(1)" or not (math.isfinite(ci_low) and math.isfinite(ci_high)):
         return False
     lower, upper = _class_exponent_band(model, x)
-    if ci_low > upper:
-        return True
-    positive = [v for v in y if v > 0]
-    y_min = min(positive) if positive else 0.0
-    return ci_high < lower and fitted_baseline <= _OVERHEAD_FREE_SHARE * y_min
+    return ci_low > upper or ci_high < lower
 
 
 def assess_fit(
@@ -142,7 +141,7 @@ def assess_fit(
     exponent_ci_high: float,
     model_margin: float = float("inf"),
     model: str | None = None,
-    fitted_baseline: float = 0.0,
+    relative_error: float = 0.0,
     dropped_outlier: bool = False,
     min_samples: float | None = None,
     max_relative_spread: float | None = None,
@@ -155,27 +154,44 @@ def assess_fit(
     with the measurement so it can be fixed, not to produce a number.
     """
     notes: list[str] = []
+    constant = model == "O(1)"
+    sizes = len(set(x))
 
-    if len(x) < MIN_POINTS:
+    if sizes < MIN_POINTS:
         notes.append("few-points")
-    if _ratio(x) < MIN_N_RATIO:
+    # An exponential class multiplies the cost per unit of n, not per factor
+    # of n, so its range is counted in doublings and its log-log exponent,
+    # which keeps rising with n, has no width to judge.
+    exponential = model in EXPONENTIAL_MODELS
+    if exponential:
+        if max(x) - min(x) < math.log2(MIN_N_RATIO):
+            notes.append("narrow-n-range")
+    elif _ratio(x) < MIN_N_RATIO:
         notes.append("narrow-n-range")
-    if _ratio(y) < MIN_Y_RATIO:
+    # A constant class is flat and all overhead by definition; what is
+    # doubtful about it is said once, by "constant-class".
+    if constant:
+        notes.append("constant-class")
+    elif _ratio(y) < MIN_Y_RATIO:
         notes.append("flat-signal")
 
     ci_width = exponent_ci_high - exponent_ci_low
-    if math.isfinite(ci_width) and ci_width > MAX_EXPONENT_CI_WIDTH:
+    if not exponential and math.isfinite(ci_width) and ci_width > MAX_EXPONENT_CI_WIDTH:
         notes.append("wide-exponent-ci")
 
     y_max = max(y) if y else 0.0
-    if y_max > 0 and max(0.0, effective_baseline) / y_max > MAX_OVERHEAD_SHARE:
+    if not constant and y_max > 0 and max(0.0, effective_baseline) / y_max > MAX_OVERHEAD_SHARE:
         notes.append("overhead-dominated")
 
-    if model_margin < MIN_MODEL_MARGIN:
+    required_margin = SHORT_SWEEP_MARGIN if sizes < SHORT_SWEEP_POINTS else MIN_MODEL_MARGIN
+    if model_margin < required_margin:
         notes.append("ambiguous-class")
 
+    if relative_error > MAX_RELATIVE_ERROR:
+        notes.append("poor-fit")
+
     if model is not None and _exponent_contradicts_class(
-        model, x, y, exponent_ci_low, exponent_ci_high, fitted_baseline
+        model, x, exponent_ci_low, exponent_ci_high
     ):
         notes.append("exponent-mismatch")
 
@@ -185,7 +201,7 @@ def assess_fit(
     # The largest input is never discarded as an outlier, so a flat series
     # with one jump at the end is fitted as growth.  It may be; but it is one
     # reading's word against all the others.
-    if model not in (None, "O(1)") and len(x) >= MIN_POINTS:
+    if model not in (None, "O(1)") and sizes >= MIN_POINTS:
         pairs = sorted(zip(x, y))
         head_x = [p[0] for p in pairs if p[0] < pairs[-1][0]]
         head_y = [p[1] for p in pairs if p[0] < pairs[-1][0]]

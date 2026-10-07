@@ -19,33 +19,6 @@ _EXPONENT_BOOTSTRAP_SAMPLES = 200
 _REL_RESIDUAL_FLOOR = 1e-4
 
 
-def _ols_fit(
-    x: List[float], y: List[float], basis: Callable[[float], float]
-) -> tuple[float, float, float]:
-    """Fit y = C·f(n) + baseline via OLS.  Returns (C, baseline, rss)."""
-    n = len(x)
-    if n < 2:
-        return 0.0, 0.0, float("inf")
-
-    F = [basis(xi) for xi in x]
-    sum_f = sum(F)
-    sum_y = sum(y)
-    sum_ff = sum(fi * fi for fi in F)
-    sum_fy = sum(fi * yi for fi, yi in zip(F, y))
-
-    denom = n * sum_ff - sum_f * sum_f
-    if abs(denom) < 1e-30:
-        # A constant basis leaves only the intercept: the mean, with the
-        # residuals around it — not an infinite RSS.
-        mean = sum_y / n
-        return 0.0, mean, sum((yi - mean) ** 2 for yi in y)
-
-    C = (n * sum_fy - sum_f * sum_y) / denom
-    baseline = (sum_y - C * sum_f) / n
-    rss = sum((yi - (C * fi + baseline)) ** 2 for fi, yi in zip(F, y))
-    return C, baseline, rss
-
-
 def _relative_scales(y: List[float]) -> List[float]:
     """Return the magnitude each residual is measured against.
 
@@ -94,11 +67,18 @@ def _wls_fit(
 
     # Degenerate (constant) basis, judged relative to the basis's own weighted
     # magnitude so that tiny weights on huge timings do not trip it.
-    if s_ff <= 1e-12 * sum(wi * fi * fi for wi, fi in zip(w, F)):
+    s_f2 = sum(wi * fi * fi for wi, fi in zip(w, F))
+    if s_ff <= 1e-12 * s_f2:
         C, baseline = 0.0, y_mean
     else:
         C = s_fy / s_ff
         baseline = y_mean - C * f_mean
+        if baseline < 0:
+            # Overhead cannot be negative.  A negative intercept is how a class
+            # that grows too slowly imitates a faster one over a finite range
+            # (C·n − b passing for n·log n), so it is refitted through zero.
+            C = sum(wi * fi * yi for wi, fi, yi in zip(w, F, y)) / s_f2
+            baseline = 0.0
     sse = sum(
         ((yi - (C * fi + baseline)) / si) ** 2 for fi, yi, si in zip(F, y, scales)
     )
@@ -371,11 +351,6 @@ def _tail_ratio_favors_simpler(
     return abs(math.log(observed / expected_simpler)) <= abs(
         math.log(observed / expected_complexer)
     )
-
-
-def _tail_ratio_favors_linear(x: List[float], y: List[float]) -> bool:
-    """Backward-compatible wrapper for the O(n) vs O(n log n) tail check."""
-    return _tail_ratio_favors_simpler(x, y, "O(n)", "O(n log n)")
 
 
 def _upper_bound_scale(

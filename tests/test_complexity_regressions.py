@@ -64,10 +64,11 @@ def test_real_cache_bound_series_is_n_log_n_not_quadratic(series):
     assert row["model"] == "O(n log n)"
     assert row["runner_up"] != "O(n²)"
     # The bound comes from the same relative fit, so it is tight at small n
-    # too — not a curve 30x above the first reading.
+    # too — not a curve 30x above the first reading.  It cannot be tighter:
+    # these grow faster than n·log n, and overhead is never fitted negative.
     fn = _basis_functions()[row["model"]]
     first = row["C"] * fn(x[0]) + row["baseline"] + row["offset"]
-    assert y[0] <= first < 2 * y[0]
+    assert y[0] <= first < 3 * y[0]
     assert _bound_covers(row, x, y)
 
 
@@ -76,20 +77,30 @@ def test_exponent_interval_outside_the_class_band_is_flagged():
     y = [v**1.25 * 1e-5 for v in x]
     quality = assess_fit(
         x, y, effective_baseline=0.0, exponent_ci_low=1.2, exponent_ci_high=1.3,
-        model_margin=50.0, model="O(n²)", fitted_baseline=0.0,
+        model_margin=50.0, model="O(n²)",
     )
     assert "exponent-mismatch" in quality.notes
     assert quality.confidence != "high"
 
 
-def test_overhead_can_explain_an_exponent_below_the_band():
+def test_exponent_is_measured_net_of_fitted_overhead():
+    # Startup flattens the raw log-log slope of O(n²) to about n^0.5; the
+    # exponent describes the work, so the overhead comes off first.
     x = [1e3, 1e4, 1e5, 1e6]
     y = [400 + 600 * (v / 1e6) ** 2 for v in x]
-    quality = assess_fit(
-        x, y, effective_baseline=400.0, exponent_ci_low=0.1, exponent_ci_high=0.4,
-        model_margin=50.0, model="O(n²)", fitted_baseline=400.0,
-    )
-    assert "exponent-mismatch" not in quality.notes
+    row = _fit(x, y)
+    assert row["model"] == "O(n²)"
+    assert row["empirical_exponent"] == pytest.approx(2.0, abs=0.01)
+    assert "exponent-mismatch" not in row["confidence_notes"]
+
+
+def test_negative_overhead_cannot_disguise_a_slower_class():
+    # C·n − b imitates n·log n over a finite range; overhead is never negative.
+    x = _geomspace(1e3, 1e6, 8)
+    y = [v * math.log(v) * 1e-6 for v in x]
+    _, baseline, _ = _wls_fit(x, y, _basis_functions()["O(n)"])
+    assert baseline == 0.0
+    assert _select_model(x, y) == "O(n log n)"
 
 
 def test_log_class_band_follows_its_local_exponent_at_small_n():
@@ -97,7 +108,7 @@ def test_log_class_band_follows_its_local_exponent_at_small_n():
     y = [math.log(v) for v in x]
     quality = assess_fit(
         x, y, effective_baseline=0.0, exponent_ci_low=0.7, exponent_ci_high=0.9,
-        model_margin=50.0, model="O(log n)", fitted_baseline=0.0,
+        model_margin=50.0, model="O(log n)",
     )
     assert "exponent-mismatch" not in quality.notes
 

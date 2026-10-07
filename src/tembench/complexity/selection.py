@@ -25,7 +25,7 @@ from .fitting import (
     _tail_ratio_favors_simpler,
     _wls_fit,
 )
-from .models import _MODEL_ORDER, _basis_functions
+from .models import _MODEL_ORDER, EXPONENTIAL_MODELS, MAX_EXPONENTIAL_N, _basis_functions
 
 _LOW_DYNAMIC_RANGE_MAX = 5.0
 _STEP_DOWN_AIC_TOL = 2.0
@@ -94,10 +94,9 @@ def _rank_models(
         score = _model_score(x, y, bases[model])
         if math.isfinite(score):
             candidates[model] = score
-    # Exponential bases can overfit short polynomial series. Only admit this
-    # candidate when observed growth is already beyond the polynomial range.
-    if positive_series and _log_log_slope(x, y) < 3.2:
-        candidates.pop("O(n² 2^n)", None)
+    if max(x) > MAX_EXPONENTIAL_N:
+        for model in EXPONENTIAL_MODELS:
+            candidates.pop(model, None)
     if not candidates:
         return (slope_hint if positive_series else "O(n)"), {}
 

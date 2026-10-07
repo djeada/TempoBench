@@ -18,6 +18,7 @@ _MODEL_SLOPE_INTERVALS = {
     "O(n log n)": (1.05, 1.55),
     "O(n²)": (1.55, 2.4),
     "O(n³)": (2.4, math.inf),
+    "O(2^n)": (2.4, math.inf),
     "O(n² 2^n)": (2.4, math.inf),
 }
 

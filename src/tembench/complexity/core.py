@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List
+from typing import Callable, List
 
 import pandas as pd
 
@@ -77,7 +77,8 @@ def fit_models(
 
     Returns DataFrame: by…, model, display_model, C, baseline, offset, formula,
     rss, nobs, empirical_exponent, exponent_ci_low, exponent_ci_high,
-    runner_up, model_margin, confidence, confidence_notes
+    runner_up, model_margin, confidence, confidence_notes, caveats (the
+    machine-readable codes behind confidence_notes, comma-separated)
 
     A class is always returned; `confidence` says whether the measurements could
     support it.  See `tembench.complexity.quality`.
@@ -145,8 +146,12 @@ def fit_models(
         scale = _upper_bound_scale(x, y, fn, C, baseline)
         C, baseline = C * scale, baseline * scale
         offset = _upper_bound_offset(x, y, fn, C, baseline)
+        # The exponent describes the work, so the fitted overhead comes off
+        # first: a constant flattens the raw log-log slope (O(n²) plus startup
+        # measures about n^0.5) and would make every class look simpler.
+        net_y = y if model == "O(1)" else [yi - fitted_baseline for yi in y]
         empirical_exponent, exponent_ci_low, exponent_ci_high = _bootstrap_exponent_ci(
-            x, y
+            x, net_y
         )
         display_model = _format_model_label(
             model,
@@ -172,7 +177,7 @@ def fit_models(
             exponent_ci_high=exponent_ci_high,
             model_margin=margin,
             model=model,
-            fitted_baseline=fitted_baseline,
+            relative_error=_relative_rms(x, y, fn, C / scale, fitted_baseline),
             dropped_outlier=model == "O(1)" and _constant_only_without_outlier(y, x),
             min_samples=min_samples,
             max_relative_spread=max_relative_spread,
@@ -194,11 +199,20 @@ def fit_models(
                 "model_margin": margin,
                 "confidence": quality.confidence,
                 "confidence_notes": quality.summary,
+                "caveats": ",".join(quality.notes),
             }
         )
         results.append(rec)
 
     return pd.DataFrame(results)
+
+
+def _relative_rms(
+    x: List[float], y: List[float], fn: Callable[[float], float], C: float, baseline: float
+) -> float:
+    """Typical relative miss of the fitted (unscaled) curve, over positive readings."""
+    misses = [(yi - (C * fn(xi) + baseline)) / yi for xi, yi in zip(x, y) if yi > 0]
+    return math.sqrt(sum(m * m for m in misses) / len(misses)) if misses else 0.0
 
 
 def predict_series(
