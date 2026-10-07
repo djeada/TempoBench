@@ -6,9 +6,12 @@ from pathlib import Path
 
 import pandas as pd
 import typer
+import yaml
 from rich.console import Console
 from rich.table import Table
 
+from ..config import Config, load_config
+from ..runner.core import pinning_problem
 from ..summarize import grid_columns, infer_series_column, infer_x_column
 
 app = typer.Typer(
@@ -108,3 +111,27 @@ def print_artifact(kind: str, path: Path) -> None:
     console.print(f"  [dim]Path[/dim]  [bold]{resolved}[/bold]")
     if path.suffix.lower() == ".html":
         console.print(f"  [dim]Open[/dim]  file://{resolved}")
+
+
+def load_config_or_fail(path: Path, workers: int | None = None) -> Config:
+    """Load a benchmark config, reporting a bad one as a message, not a traceback.
+
+    `workers` overrides the configured worker count before anything that
+    depends on it is checked.
+    """
+    try:
+        cfg = load_config(path)
+        if workers is not None:
+            cfg.limits.workers = workers
+        problem = pinning_problem(cfg)
+    except (ValueError, yaml.YAMLError) as e:
+        raise fail(f"Invalid config: {e}") from None
+    if problem:
+        console.print(f"[yellow]![/yellow] {problem}.")
+    if cfg.limits.prune_on_timeout and cfg.limits.workers > 1:
+        console.print(
+            "[yellow]![/yellow] prune_on_timeout only skips the remaining repeats of a "
+            "point that timed out when running with several workers; larger inputs "
+            "still run."
+        )
+    return cfg

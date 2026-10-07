@@ -6,11 +6,9 @@ import dataclasses
 from datetime import datetime, timezone
 from itertools import product
 from pathlib import Path
-from typing import Any
 
-from ..command import quote_argument
 from ..config import Benchmark
-from ..placeholders import builtin_placeholders
+from ..placeholders import format_cmd
 from .process import run_once
 from .reported import MARKER_NAME
 from .result import TrialResult
@@ -24,43 +22,6 @@ def expand_grid(grid: dict[str, list]) -> list[dict[str, object]]:
         params = dict(zip(keys, combo))
         points.append(params)
     return points
-
-
-class _GridValue:
-    """A grid value that quotes itself when substituted into a command.
-
-    Commands are split into arguments and launched directly, so an unquoted
-    ``two words`` would become two arguments and ``it's`` would not parse at
-    all.  A value is therefore always exactly one argument.  Format specs still
-    apply (``{n:05d}``), and ``{key:raw}`` splices the value in verbatim for a
-    grid that holds whole command lines.
-    """
-
-    __slots__ = ("value",)
-
-    def __init__(self, value: object):
-        self.value = value
-
-    def __format__(self, spec: str) -> str:
-        if spec == "raw":
-            return str(self.value)
-        return quote_argument(format(self.value, spec))
-
-    def __getitem__(self, key: Any) -> _GridValue:
-        return _GridValue(self.value[key])  # type: ignore[index]
-
-    def __getattr__(self, name: str) -> _GridValue:
-        return _GridValue(getattr(self.value, name))
-
-
-def format_cmd(template: str, params: dict[str, object]) -> str:
-    """Expand a command template from the grid point plus built-in placeholders.
-
-    Grid keys take precedence, so a sweep may shadow a built-in.  Built-ins
-    arrive already quoted.
-    """
-    grid = {key: _GridValue(value) for key, value in params.items()}
-    return template.format(**{**builtin_placeholders(), **grid})
 
 
 def _require_reported(rec: TrialResult) -> TrialResult:
@@ -86,6 +47,7 @@ def _run_grid_point(
     poll_interval_sec: float = 0.01,
     metric: str = "auto",
     prune_on_timeout: bool = False,
+    cpu: int | None = None,
 ) -> list[TrialResult]:
     """Execute warmups + repeats for a single (bench, params) combination.
 
@@ -97,7 +59,10 @@ def _run_grid_point(
     """
     cmd = format_cmd(bench.cmd, params)
     cwd = Path(bench.workdir) if bench.workdir else None
-    reps = max(1, repeats)
+    reps = repeats
+
+    def launch() -> TrialResult:
+        return run_once(cmd, bench.env, cwd, timeout, poll_interval_sec=poll_interval_sec, cpu=cpu)
 
     def context(rec: TrialResult) -> TrialResult:
         return rec.with_context(bench=bench.name, cmd=cmd, params=params, metric=metric)
@@ -105,8 +70,8 @@ def _run_grid_point(
     def skipped(count: int) -> list[TrialResult]:
         return [skipped_record(bench, params, metric) for _ in range(count)]
 
-    for _ in range(max(0, warmups)):
-        warm = run_once(cmd, bench.env, cwd, timeout, poll_interval_sec=poll_interval_sec)
+    for _ in range(warmups):
+        warm = launch()
         if prune_on_timeout and warm.status == "timeout":
             # The warm-up is the observation that this point is too slow.
             return [context(warm), *skipped(reps - 1)]
@@ -114,9 +79,7 @@ def _run_grid_point(
     results: list[TrialResult] = []
     for _ in range(reps):
         for attempt in range(1, max(0, retries) + 2):
-            rec = context(
-                run_once(cmd, bench.env, cwd, timeout, poll_interval_sec=poll_interval_sec)
-            )
+            rec = context(launch())
             if metric == "reported":
                 rec = _require_reported(rec)
             if rec.status == "ok":

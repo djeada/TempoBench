@@ -9,12 +9,14 @@ import typer
 from rich.table import Table
 
 from ...command import WINDOWS
-from ...config import Config, load_config
+from ...config import Config
+from ...placeholders import format_cmd
 from ...runner import expand_grid
-from ...runner.grid import _run_grid_point, format_cmd
+from ...runner.core import pinning_problem
+from ...runner.grid import _run_grid_point
 from ...runner.process import build_once
 from ...runner.reported import MARKER_NAME
-from ..app import app, console, fail, print_heading
+from ..app import app, console, fail, load_config_or_fail, print_heading
 
 #: Tokens that only mean something to a shell.
 _SHELL_OPERATORS = frozenset({"|", "||", "&&", ";", "&", ">", ">>", "<", "2>", "2>&1"})
@@ -54,10 +56,10 @@ def validate(
     A full sweep can take many minutes; this answers in seconds whether the
     command runs at all and whether the configured metric will be available.
     """
-    cfg = load_config(config)  # raises with a specific message on bad config
+    cfg = load_config_or_fail(config)
     points = expand_grid(cfg.grid)
-    reps = max(1, cfg.limits.repeats)
-    trials = len(cfg.benchmarks) * len(points) * (reps + max(0, cfg.limits.warmups))
+    reps = cfg.limits.repeats
+    trials = len(cfg.benchmarks) * len(points) * (reps + cfg.limits.warmups)
 
     print_heading("Validating Config", config=config, metric=cfg.limits.metric)
 
@@ -73,7 +75,7 @@ def validate(
     console.print()
     console.print(
         f"[dim]Plan[/dim]  {len(cfg.benchmarks)} benchmark(s) x {len(points)} grid point(s) "
-        f"x {reps} repeat(s) + {max(0, cfg.limits.warmups)} warm-up(s) = "
+        f"x {reps} repeat(s) + {cfg.limits.warmups} warm-up(s) = "
         f"[bold]{trials}[/bold] process launch(es)"
     )
 
@@ -136,8 +138,15 @@ def validate(
             failures.append((bench.name, "build failed", build_error))
             continue
         result = _run_grid_point(
-            bench, point, cfg.limits.timeout_sec, 0, 1, 0,
-            cfg.limits.rss_poll_interval_sec, cfg.limits.metric,
+            bench,
+            point,
+            cfg.limits.timeout_sec,
+            warmups=0,
+            repeats=1,
+            retries=0,
+            poll_interval_sec=cfg.limits.rss_poll_interval_sec,
+            metric=cfg.limits.metric,
+            cpu=cfg.pin_cpu if pinning_problem(cfg) is None else None,
         )[0]
         if result.status != "ok":
             lines = (result.stderr or result.stdout or "").strip().splitlines()

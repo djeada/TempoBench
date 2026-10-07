@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import subprocess
 
 WINDOWS = os.name == "nt"
 
@@ -29,8 +30,7 @@ def quote_argument(value: str) -> str:
     """Quote a single argument so it survives substitution into a command."""
     if not WINDOWS:
         return shlex.quote(value)
-    # POSIX single-quoting means nothing to CreateProcess; it wants double
-    # quotes, and only where whitespace would otherwise split the argument.
-    if value and not any(ch.isspace() or ch == '"' for ch in value):
-        return value
-    return '"' + value.replace('"', r"\"") + '"'
+    # POSIX single-quoting means nothing to CreateProcess.  list2cmdline
+    # applies the MSVC runtime's rules, including doubling the backslashes
+    # before a closing quote (`"C:\a b\\"`, not `"C:\a b\"`).
+    return subprocess.list2cmdline([value])

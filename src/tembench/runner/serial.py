@@ -2,17 +2,13 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Mapping
-from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, cast
 
 from ..config import Config
 from .grid import _run_grid_point, error_records, skipped_record
 from .process import build_once
-from .result import TrialResult
-
-TrialCallback = Callable[[str, dict[str, object], int, int, TrialResult], None]
+from .result import ResultWriter
 
 
 def _should_prune_key(timed_out_keys: set[object], key_val: object) -> bool:
@@ -40,68 +36,46 @@ def _series_key(params: Mapping[str, object], growth_key: str) -> tuple:
 
 def _run_serial(
     cfg: Config,
-    out_path: Path,
+    writer: ResultWriter,
     points: list[dict[str, object]],
     retries: int,
-    on_trial: TrialCallback | None,
-    append: bool,
-    poll_interval_sec: float,
-):
-    """Original sequential execution path — preserves pruning behaviour."""
-    mode = "a" if append else "w"
-    reps = max(1, cfg.limits.repeats)
-    metric = cfg.limits.metric
-    with out_path.open(mode, encoding="utf-8") as f:
+    cpu: int | None,
+) -> None:
+    """Run every grid point in turn, pruning larger inputs after a timeout."""
+    limits = cfg.limits
+    gk = limits.growth_key
+    for bench in cfg.benchmarks:
+        build_error = build_once(bench)
+        if build_error:
+            for params in points:
+                writer.emit(bench.name, params, error_records(bench, params, limits.repeats, build_error, limits.metric))
+            continue
 
-        def emit(bench_name: str, params: dict[str, object], results: list[TrialResult]):
-            for i, rec in enumerate(results):
-                f.write(json.dumps(rec.to_dict()) + "\n")
-                f.flush()
-                if on_trial:
-                    on_trial(bench_name, params, i + 1, reps, rec)
-
-        for bench in cfg.benchmarks:
-            build_error = build_once(bench)
-            if build_error:
-                for params in points:
-                    emit(bench.name, params, error_records(bench, params, reps, build_error, metric))
+        timed_out_by_series: dict[tuple, set] = {}
+        for params in points:
+            key_val = params.get(gk) if gk else None
+            timed_out_keys = timed_out_by_series.setdefault(_series_key(params, gk) if gk else (), set())
+            prunable = limits.prune_on_timeout and key_val is not None
+            if prunable and _should_prune_key(timed_out_keys, key_val):
+                writer.emit(
+                    bench.name,
+                    params,
+                    [skipped_record(bench, params, limits.metric) for _ in range(limits.repeats)],
+                )
                 continue
 
-            timed_out_by_series: dict[tuple, set] = {}
-            for params in points:
-                gk = cfg.limits.growth_key
-                key_val = params.get(gk) if gk else None
-                series = _series_key(params, gk) if gk else ()
-                timed_out_keys = timed_out_by_series.setdefault(series, set())
-                if (
-                    cfg.limits.prune_on_timeout
-                    and gk
-                    and key_val is not None
-                    and _should_prune_key(timed_out_keys, key_val)
-                ):
-                    emit(
-                        bench.name,
-                        params,
-                        [skipped_record(bench, params, metric) for _ in range(reps)],
-                    )
-                    continue
-
-                results = _run_grid_point(
-                    bench,
-                    params,
-                    cfg.limits.timeout_sec,
-                    cfg.limits.warmups,
-                    cfg.limits.repeats,
-                    retries,
-                    poll_interval_sec,
-                    metric,
-                    prune_on_timeout=cfg.limits.prune_on_timeout,
-                )
-                emit(bench.name, params, results)
-                if (
-                    cfg.limits.prune_on_timeout
-                    and gk
-                    and key_val is not None
-                    and any(rec.status == "timeout" for rec in results)
-                ):
-                    timed_out_keys.add(key_val)
+            results = _run_grid_point(
+                bench,
+                params,
+                limits.timeout_sec,
+                limits.warmups,
+                limits.repeats,
+                retries,
+                limits.rss_poll_interval_sec,
+                limits.metric,
+                prune_on_timeout=limits.prune_on_timeout,
+                cpu=cpu,
+            )
+            writer.emit(bench.name, params, results)
+            if prunable and any(rec.status == "timeout" for rec in results):
+                timed_out_keys.add(key_val)
