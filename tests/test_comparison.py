@@ -198,7 +198,7 @@ def test_comparison_report_renders_the_tally(tmp_path: Path):
     )
     html = generate_comparison_report(df, threshold_pct=5.0)
     assert "No regressions detected" in html
-    assert "Improvements" in html
+    assert "Faster" in html
 
 
 def test_a_point_that_stopped_producing_timings_is_a_regression(tmp_path: Path):
@@ -281,3 +281,59 @@ def test_summaries_sharing_no_timing_column_cannot_be_compared(tmp_path: Path):
         _summary(tmp_path / "base.csv", [{"bench": "b", "n": 1, "wall_ms_mean": 1.0}]),
     )
     assert result.empty
+
+
+def _mixed_comparison(tmp_path: Path) -> pd.DataFrame:
+    """One slower point, one faster, one that stopped producing a timing."""
+    return compare_summaries(
+        _summary(tmp_path / "cur.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 2.0, "peak_rss_mb_median": 20.0},
+            {"bench": "b", "n": 2, "time_ms_median": 1.0, "peak_rss_mb_median": 5.0},
+            {"bench": "b", "n": 3, "time_ms_median": None, "peak_rss_mb_median": None},
+        ]),
+        _summary(tmp_path / "base.csv", [
+            {"bench": "b", "n": 1, "time_ms_median": 1.0, "peak_rss_mb_median": 10.0},
+            {"bench": "b", "n": 2, "time_ms_median": 2.0, "peak_rss_mb_median": 10.0},
+            {"bench": "b", "n": 3, "time_ms_median": 3.0, "peak_rss_mb_median": 10.0},
+        ]),
+        threshold_pct=5.0,
+    )
+
+
+def test_comparison_report_explains_points_it_could_not_check(tmp_path: Path):
+    from tembench.reporting.comparison import generate_comparison_report
+
+    page = generate_comparison_report(_mixed_comparison(tmp_path), threshold_pct=5.0)
+    assert "2 regression(s) detected: 1 slower than the baseline + 1 could not be checked" in page
+    assert "1 grid point(s) could not be checked" in page
+    assert "no trial succeeded" in page
+
+
+def test_only_the_decisive_change_is_coloured(tmp_path: Path):
+    """Memory doubling is reported, but it decided nothing, so it is not red."""
+    from tembench.reporting.comparison import generate_comparison_report
+
+    page = generate_comparison_report(_mixed_comparison(tmp_path), threshold_pct=5.0)
+    assert page.count('class="num delta bad"') == 1
+    assert page.count('class="num delta good"') == 1
+    details = page[page.index("Every metric, side by side"):]
+    assert " bad" not in details and " good" not in details
+
+
+def test_comparison_table_leads_with_the_verdict(tmp_path: Path):
+    from tembench.reporting.comparison import generate_comparison_report
+
+    page = generate_comparison_report(_mixed_comparison(tmp_path), threshold_pct=5.0)
+    table = page[page.index("<h2>Configurations</h2>"):]
+    head = table[: table.index("</thead>")]
+    assert head.index("Verdict") < head.index("Change") < head.index("Current (ms)")
+    assert "TIME_MS" not in page and "time_ms_median_current" not in head
+
+
+def test_comparison_columns_get_readable_names():
+    from tembench.reporting.formatting import column_label
+
+    assert column_label("time_ms_median_current") == "Median time, current (ms)"
+    assert column_label("time_ms_median_delta_pct") == "Median time Δ%"
+    assert column_label("peak_rss_mb_median_baseline") == "Median peak memory, baseline (MB)"
+    assert column_label("rss") == "Resid. SS"

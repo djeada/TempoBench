@@ -483,3 +483,108 @@ def test_plot_explains_itself_when_no_input_size_axis_exists(tmp_path: Path):
     )
     assert result.exit_code == 1, result.output
     assert "which column is the input size" in result.output
+
+
+def _sweep(tmp_path: Path, memory: bool = True) -> Path:
+    summary = tmp_path / "summary.csv"
+    rows = ["bench,impl,n,time_ms_median" + (",peak_rss_mb_median" if memory else "")]
+    for bench in ["p", "q"]:
+        for impl, k in [("a", 0.001), ("b", 0.002)]:
+            for n in [1000, 10000, 100000, 1000000]:
+                rows.append(f"{bench},{impl},{n},{n * k}" + (",12.0" if memory else ""))
+    summary.write_text("\n".join(rows) + "\n")
+    return summary
+
+
+@pytest.mark.parametrize(
+    "command, extra, message",
+    [
+        ("memory", [], "no memory columns"),
+        ("heatmap", ["--y", "bogus"], "'bogus' (from --y)"),
+        ("heatmap", ["--value", "nonexistent"], "'nonexistent' (from --value)"),
+        ("plot", ["--y", "nonexistent"], "'nonexistent' (from --y)"),
+        ("plot", ["--color", "bogus"], "'bogus' (from --color)"),
+    ],
+)
+def test_chart_commands_refuse_a_metric_or_axis_that_is_not_there(tmp_path: Path, command, extra, message):
+    """Quietly charting something else would present the wrong metric as the asked-for one."""
+    out = tmp_path / "out.html"
+    result = runner.invoke(
+        app, [command, "--summary", str(_sweep(tmp_path, memory=False)), *extra, "--output", str(out)]
+    )
+    assert result.exit_code == 1, result.output
+    assert message in result.output
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("command", ["plot", "dashboard", "memory", "heatmap"])
+def test_chart_commands_filter_by_bench(tmp_path: Path, command):
+    out = tmp_path / f"{command}.html"
+    ok = runner.invoke(app, [command, "--summary", str(_sweep(tmp_path)), "--bench", "p", "--output", str(out)])
+    assert ok.exit_code == 0, ok.output
+    assert '"q"' not in out.read_text()
+    missing = runner.invoke(app, [command, "--summary", str(_sweep(tmp_path)), "--bench", "zzz", "--output", str(out)])
+    assert missing.exit_code == 1 and "No rows for bench 'zzz'" in missing.output
+
+
+def test_plot_names_the_fit_grouping_rather_than_no_series(tmp_path: Path):
+    result = runner.invoke(
+        app, ["plot", "--summary", str(_sweep(tmp_path)), "--output", str(tmp_path / "rt.html")]
+    )
+    assert result.exit_code == 0, result.output
+    assert "(none)" not in result.output
+    assert "one per bench × impl" in result.output
+
+
+def test_plot_flags_a_close_rival_from_the_caveat_code(tmp_path: Path):
+    """The machine-readable code, not the wording of the note, marks ambiguity."""
+    import pandas as pd
+
+    from tembench.cli.app import console
+    from tembench.cli.commands.plot import print_fits
+
+    fits = pd.DataFrame([{
+        "impl": "a", "model": "O(n)", "display_model": "O(n)", "formula": "T(n) ≤ n",
+        "runner_up": "O(n log n)", "confidence": "medium",
+        "confidence_notes": "reworded note", "caveats": "ambiguous-class,poor-fit",
+    }])
+    with console.capture() as captured:
+        print_fits(fits, ["impl"])
+    assert "O(n) ≈ O(n log n)" in captured.get()
+
+
+def test_log_axes_can_be_forced_linear(tmp_path: Path):
+    import json as _json
+
+    result = runner.invoke(
+        app, ["plot", "--summary", str(_sweep(tmp_path)), "--no-fit", "--no-log-x", "--no-log-y", "--output", "-"]
+    )
+    assert result.exit_code == 0, result.output
+    spec = _json.loads(result.stdout)
+    enc = spec["spec"]["layer"][0]["encoding"]
+    assert enc["x"]["scale"].get("type") != "log" and enc["y"]["scale"].get("type") != "log"
+
+
+def test_compare_refuses_an_empty_summary_without_a_traceback(tmp_path: Path):
+    empty = tmp_path / "empty.csv"
+    empty.write_text("")
+    result = runner.invoke(
+        app, ["compare", "--current", str(empty), "--baseline", str(_sweep(tmp_path)), "--output", str(tmp_path / "c.html")]
+    )
+    assert result.exit_code == 1
+    assert "has no rows" in " ".join(result.output.split())
+    assert "Traceback" not in result.output
+
+
+def test_compare_says_how_many_were_slower_and_how_many_missing(tmp_path: Path):
+    baseline = _sweep(tmp_path)
+    current = tmp_path / "current.csv"
+    lines = baseline.read_text().splitlines()
+    slower = lines[1].rsplit(",", 2)
+    current.write_text("\n".join([lines[0], f"{slower[0]},{float(slower[1]) * 2},{slower[2]}", *lines[2:-1]]) + "\n")
+    result = runner.invoke(
+        app, ["compare", "--current", str(current), "--baseline", str(baseline), "--output", str(tmp_path / "c.html")]
+    )
+    assert result.exit_code == 1
+    output = " ".join(result.output.replace("│", " ").split())
+    assert "1 slower than the baseline by more than 5% + 1 measured by the baseline but missing now" in output

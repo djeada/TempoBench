@@ -12,24 +12,33 @@ import pandas as pd
 
 from .. import PROJECT_URL
 from ..runner.provenance import read_provenance
-from ..summarize import preferred_time_column
+from ..summarize import infer_series_column, infer_x_column, preferred_time_column
 from ..system import get_system_info
-from .extract import _extract_vega_spec
 from .formatting import _stat_card, _table_html, format_number
-from .resources import (
-    json_for_script,
-    render_head_assets,
-    render_theme_toggle,
-    vega_script_tags,
+from .resources import render_page
+
+#: Fit columns worth a reader's attention, in the order the table shows them.
+_FIT_COLUMNS = (
+    "display_model",
+    "model",
+    "formula",
+    "confidence",
+    "confidence_notes",
+    "empirical_exponent",
+    "exponent_ci_low",
+    "exponent_ci_high",
+    "runner_up",
+    "nobs",
 )
-
-#: Trial statuses that mean the trial did not produce a measurement.
-_FAILURE_STATUSES = ("failed", "timeout", "error")
-#: Per-status counts a summary may carry, in the order the report shows them.
-_STATUS_COLUMNS = ("ok", "failed", "timeout", "error", "skipped")
+_CONFIDENCE_CLASS = {"high": "good", "medium": "warn", "low": "bad"}
 
 
-def _run_statistics(rows: list[dict]) -> str:
+def _size(value: float) -> str:
+    """An input size: "100,000" rather than "1.00e+05", "6" rather than "6.00"."""
+    return f"{int(value):,}" if float(value).is_integer() else format_number(value)
+
+
+def _run_statistics(rows: list[dict]) -> list[str]:
     """Stat cards counting every trial status in the raw runs.
 
     A "retried" record is an attempt superseded by a later one of the same
@@ -38,6 +47,7 @@ def _run_statistics(rows: list[dict]) -> str:
     counts = Counter(str(r.get("status", "unknown")) for r in rows)
     retried = counts.pop("retried", 0)
     cards = [
+        _stat_card(str(len(rows) - retried), "Total Trials"),
         _stat_card(str(counts.pop("ok", 0)), "Successful", "ok"),
         _stat_card(str(counts.pop("timeout", 0)), "Timeouts", "warn"),
         _stat_card(str(counts.pop("failed", 0)), "Failed", "err"),
@@ -48,10 +58,9 @@ def _run_statistics(rows: list[dict]) -> str:
             cards.append(_stat_card(str(counts.pop(status)), title, variant))
     for status, count in sorted(counts.items()):
         cards.append(_stat_card(str(count), html.escape(status.title()), "warn"))
-    cards.append(_stat_card(str(len(rows) - retried), "Total Trials", ""))
     if retried:
-        cards.append(_stat_card(str(retried), "Retried Attempts", ""))
-    return "\n        ".join(cards)
+        cards.append(_stat_card(str(retried), "Retried Attempts"))
+    return cards
 
 
 def _unmeasured_section(df: pd.DataFrame, time_col: str | None) -> str:
@@ -72,30 +81,114 @@ def _unmeasured_section(df: pd.DataFrame, time_col: str | None) -> str:
         and c != "time_source"
     ]
     return f"""
-    <div class="section">
-      <h2><span class="icon">⚠️</span> Grid Points Without a Measurement</h2>
+    <section class="section callout warn">
+      <h2>Grid Points Without a Measurement</h2>
       <p class="desc">No trial succeeded at these {len(missing)} grid point(s), so they
         have no timing and are left out of the charts and fits. The status counts say why.</p>
       {_table_html(missing[keep])}
-    </div>"""
+    </section>"""
+
+
+def _series_name(row: pd.Series, by: list[str], single_bench: bool) -> str:
+    """How a fitted series is named on its card: its grid values, joined."""
+    from ..plotting._common import SINGLE_SERIES
+
+    shown = [c for c in by if c != SINGLE_SERIES and not (single_bench and c == "bench")]
+    if not shown:
+        shown = [c for c in by if c != SINGLE_SERIES]
+    return " · ".join(str(row[c]) for c in shown) or "All measurements"
+
+
+def _fit_cards(fits: pd.DataFrame, by: list[str], single_bench: bool) -> str:
+    """One card per series: the class, how far to trust it, and its bound."""
+    esc = html.escape
+    cards = []
+    for _, row in fits.iterrows():
+        klass = str(row.get("display_model", row["model"]))
+        confidence = str(row.get("confidence", "") or "")
+        caveats = str(row.get("caveats", "") or "")
+        rival = row.get("runner_up")
+        alternative = ""
+        # When a rival class explains the data about as well, it is named: it
+        # says which way the answer might go.
+        if "ambiguous-class" in caveats.split(",") and isinstance(rival, str) and rival:
+            alternative = f'<span class="fit-alt">or {esc(rival)}</span>'
+        badge = ""
+        if confidence:
+            badge = (
+                f'<span class="badge {_CONFIDENCE_CLASS.get(confidence, "neutral")}">'
+                f"{esc(confidence)} confidence</span>"
+            )
+        notes = str(row.get("confidence_notes", "") or "")
+        cards.append(
+            '<div class="fit-card">'
+            f'<div class="fit-series">{esc(_series_name(row, by, single_bench))}</div>'
+            f'<div class="fit-class">{esc(klass)}{alternative}</div>'
+            f"{badge}"
+            f'<code class="fit-bound">{esc(str(row["formula"]))}</code>'
+            + (f'<p class="fit-notes">{esc(notes[:1].upper() + notes[1:])}</p>' if notes else "")
+            + "</div>"
+        )
+    return f'<div class="fit-grid">{"".join(cards)}</div>'
+
+
+def _fits_table(fits: pd.DataFrame, by: list[str]) -> str:
+    """The fitted classes with their evidence; every raw column in a fold."""
+    from ..plotting._common import SINGLE_SERIES
+
+    keys = [c for c in by if c != SINGLE_SERIES and c in fits.columns]
+    columns = [c for c in _FIT_COLUMNS if c in fits.columns]
+    # The raw class only adds something when the strict label rewrote it.
+    if "display_model" in fits.columns and (
+        fits["model"].astype(str) == fits["display_model"].astype(str)
+    ).all():
+        columns.remove("model")
+    # A column with nothing in it (no caveats anywhere, say) is left out.
+    columns = [c for c in columns if fits[c].replace("", pd.NA).notna().any()]
+    raw = fits.drop(columns=[SINGLE_SERIES], errors="ignore")
+    return f"""{_table_html(fits[keys + columns], highlight_col="formula")}
+      <details><summary>Every fit column</summary>{_table_html(raw)}</details>"""
+
+
+def _read_fits(fits: Path | pd.DataFrame | None) -> pd.DataFrame | None:
+    if fits is None or isinstance(fits, pd.DataFrame):
+        return fits
+    if not fits.exists():
+        return None
+    try:
+        return pd.read_csv(fits)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 def generate_report(
     summary_csv: Path,
     runs_jsonl: Optional[Path] = None,
-    fits_csv: Optional[Path] = None,
-    chart_html: Optional[Path] = None,
+    fits_csv: Path | pd.DataFrame | None = None,
     title: str = "TempoBench Report",
     output_path: Optional[Path] = None,
     provenance_json: Optional[Path] = None,
+    x: str | None = None,
+    series: str | None = None,
+    complexity_strategy: str = "heuristic",
 ) -> str:
     """Generate a comprehensive HTML report.
+
+    It leads with the fitted complexity class of every series, then the runtime
+    chart (drawn from the summary, with those same fits), the evidence behind
+    each class, and the full results.  `x` and `series` default to the axes
+    inferred from the summary; fits not given are computed.
 
     The System Information section describes the machine the benchmark ran on,
     taken from the provenance snapshot written next to the results.  Falling
     back to the current machine is only correct when the report is produced
     where the run happened, so that case is labelled rather than assumed.
     """
+    # Imported here: the plotting package imports this one for its labels.
+    from ..plotting import fit_frame, fit_runtime, plot_runtime
+    from ..plotting._common import default_series, multi_bench
+    from ..plotting.save import chart_sections
+
     df = pd.read_csv(summary_csv)
 
     recorded = read_provenance(provenance_json) if provenance_json else None
@@ -128,25 +221,73 @@ def generate_report(
                 "machines, so their timings are not comparable.</strong>"
             )
 
-    cards = []
     time_col = preferred_time_column(df.columns)
+    x = x or infer_x_column(df)
+    if series is None and x is not None:
+        series = infer_series_column(df, x)
+    series = default_series(df, series)
+
+    # ---- Complexity: the headline -------------------------------------------
+    fits = _read_fits(fits_csv)
+    by: list[str] = []
+    if x is not None and time_col is not None and x in df.columns:
+        _, by = fit_frame(df, x, series)
+        if fits is None:
+            fits, by = fit_runtime(
+                df, x=x, y=time_col, color=series, complexity_strategy=complexity_strategy
+            )
+        elif not fits.empty and not set(by) <= set(fits.columns):
+            # Fits grouped some other way cannot be drawn on this chart, so
+            # the table keys them by their own columns.
+            by = [c for c in fits.columns if c in df.columns]
+    single_bench = not multi_bench(df)
+
+    complexity_section = ""
+    fits_section = ""
+    if fits is not None and not fits.empty:
+        complexity_section = f"""
+    <section class="section">
+      <h2>Complexity Classes</h2>
+      <p class="desc">The growth class that best explains each series, and how far the
+        measurements support it.</p>
+      {_fit_cards(fits, by, single_bench)}
+    </section>"""
+        fits_section = f"""
+    <section class="section">
+      <h2>Complexity Analysis</h2>
+      <p class="desc">Best-fit class per series, selected by AIC over relative-error fits.
+        The upper bound satisfies T(n) ≤ C·f(n) + baseline at every measured size.
+        <strong>Confidence</strong> states whether the measurements can support the
+        class; anything below <em>high</em> lists the caveats that weakened it.</p>
+      {_fits_table(fits, by)}
+    </section>"""
+    elif x is not None and time_col is not None:
+        complexity_section = """
+    <section class="section">
+      <h2>Complexity Classes</h2>
+      <p class="empty-msg">No series has the two or more measured input sizes a
+        complexity fit needs.</p>
+    </section>"""
+
+    # ---- Overview -------------------------------------------------------------
+    cards = [_stat_card(str(len(df)), "Configurations")]
+    if x is not None and x in df.columns:
+        sizes = pd.to_numeric(df[x], errors="coerce").dropna()
+        if not sizes.empty:
+            cards.append(
+                _stat_card(
+                    str(sizes.nunique()),
+                    "Input Sizes",
+                    detail=esc(f"{_size(sizes.min())} – {_size(sizes.max())}"),
+                )
+            )
     times = pd.to_numeric(df[time_col], errors="coerce").dropna() if time_col else None
-    if times is not None and not times.empty:
-        cards.append(_stat_card(f"{format_number(times.min())} ms", "Fastest"))
-        cards.append(_stat_card(f"{format_number(times.max())} ms", "Slowest"))
-        cards.append(_stat_card(f"{format_number(times.mean())} ms", "Average"))
+    if times is not None and len(times) < len(df):
+        cards.append(_stat_card(str(len(df) - len(times)), "Without a Measurement", "err"))
     if "peak_rss_mb_median" in df.columns:
         rss = pd.to_numeric(df["peak_rss_mb_median"], errors="coerce").dropna()
         if not rss.empty:
             cards.append(_stat_card(f"{format_number(rss.max())} MB", "Peak Memory"))
-    cards.append(_stat_card(str(len(df)), "Configurations"))
-    if times is not None and len(times) < len(df):
-        cards.append(
-            _stat_card(str(len(df) - len(times)), "Without a Measurement", "err")
-        )
-    overview_cards = "\n".join(cards)
-
-    runs_section = ""
     if runs_jsonl and runs_jsonl.exists():
         rows = []
         with runs_jsonl.open(encoding="utf-8") as f:
@@ -156,51 +297,36 @@ def generate_report(
                 except json.JSONDecodeError:
                     continue
         if rows:
-            runs_section = f"""
-    <div class="section">
-      <h2><span class="icon">🏃</span> Run Statistics</h2>
-      <div class="stat-grid">
-        {_run_statistics(rows)}
-      </div>
-    </div>"""
+            cards.extend(_run_statistics(rows))
+    overview_section = f"""
+    <section class="section">
+      <h2>Overview</h2>
+      <div class="stat-grid">{"".join(cards)}</div>
+    </section>"""
 
+    # ---- Runtime charts, one per benchmark when each has its own series ----
     chart_section = ""
-    if chart_html and chart_html.exists():
-        raw = chart_html.read_text(encoding="utf-8")
-        spec_json = _extract_vega_spec(raw)
-        if spec_json:
-            chart_section = f"""
-    <div class="section">
-      <h2><span class="icon">📊</span> Performance Charts</h2>
-      <div class="chart-container"><div id="vis"></div></div>
-{vega_script_tags("      ")}
-      <script>vegaEmbed('#vis', {json_for_script(spec_json)}, {{renderer:'svg',actions:false}});</script>
-    </div>"""
-        else:
-            chart_section = f"""
-    <div class="section">
-      <h2><span class="icon">📊</span> Performance Charts</h2>
-      <iframe src="{esc(chart_html.name, quote=True)}" style="width:100%;height:520px;border:none;border-radius:8px;"></iframe>
-    </div>"""
+    specs: list[dict] = []
+    if x is not None and time_col is not None and x in df.columns:
+        # Fits read from a CSV are only drawn if they carry the curve itself
+        # and are grouped as the chart is; otherwise the chart fits its own.
+        needed = {*by, "model", "C", "baseline", "offset", "formula"}
+        drawable = fits if fits is not None and needed <= set(fits.columns) else None
+        benches = (
+            sorted(df["bench"].dropna().astype(str).unique())
+            if multi_bench(df) and series != "bench"
+            else [None]
+        )
+        charts = [
+            plot_runtime(
+                df, x=x, y=time_col, color=series, bench=bench,
+                fits=drawable, complexity_strategy=complexity_strategy,
+                title=f"Runtime: {bench}" if bench else None,
+            )
+            for bench in benches
+        ]
+        chart_section, specs = chart_sections(charts)
 
-    fits_section = ""
-    if fits_csv and fits_csv.exists():
-        try:
-            fits_df = pd.read_csv(fits_csv)
-        except pd.errors.EmptyDataError:
-            fits_df = pd.DataFrame()
-        if not fits_df.empty:
-            fits_section = f"""
-    <div class="section">
-      <h2><span class="icon">📐</span> Complexity Analysis</h2>
-      <p class="desc">Best-fit Big-O complexity class per implementation, selected via AIC.
-        The upper-bound curve satisfies T(n) ≤ C·f(n) + baseline for all observed data.
-        <strong>Confidence</strong> states whether the measurements can support the class:
-        anything below <em>high</em> lists the caveats that weakened it.</p>
-      {_table_html(fits_df, highlight_col='formula')}
-    </div>"""
-
-    summary_table = _table_html(df)
     unmeasured_section = _unmeasured_section(df, time_col)
 
     def _si(key: str, label: str) -> str:
@@ -251,60 +377,29 @@ def generate_report(
       </div>
       {f'<div class="sysinfo-grid"><div>{run_rows}</div></div>' if run_rows else ''}"""
 
-    generated_at = get_system_info()["timestamp"]
-    date_str = generated_at[:10]
-    ts_str = generated_at
-    head_assets = render_head_assets()
-    theme_toggle_html = render_theme_toggle()
-
-    page = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{esc(title)}</title>
-{head_assets}
-</head>
-<body>
-  <div class="container">
-
-    <div class="report-header">
-      <h1>{esc(title)}</h1>
-      <div class="meta">Generated on {date_str}</div>
-    </div>
-
-    <div class="section">
-      <h2><span class="icon">⚡</span> Performance Overview</h2>
-      <div class="stat-grid">{overview_cards}</div>
-    </div>
-
-    {runs_section}
-
+    generated_at = str(get_system_info()["timestamp"])
+    body = f"""
+    {complexity_section}
+    {overview_section}
     {chart_section}
-
-    <div class="section">
-      <h2><span class="icon">📋</span> Detailed Results</h2>
-      {summary_table}
-    </div>
-
-    {unmeasured_section}
-
     {fits_section}
-
-    <div class="section">
-      <h2><span class="icon">🖥️</span> System Information</h2>
+    {unmeasured_section}
+    <section class="section">
+      <h2>Detailed Results</h2>
+      {_table_html(df)}
+    </section>
+    <section class="section">
+      <h2>System Information</h2>
       {sysinfo_html}
-    </div>
-
-    <div class="report-footer">
-      <p>Generated by <a href="{PROJECT_URL}">TempoBench</a> · {ts_str}</p>
-    </div>
-
-  </div>
-
-{theme_toggle_html}
-</body>
-</html>"""
+    </section>"""
+    page = render_page(
+        title=title,
+        kind="Report",
+        meta=f"Generated on {esc(generated_at[:10])} from {esc(Path(summary_csv).name)}",
+        body=body,
+        specs=specs,
+        footer=f'Generated by <a href="{PROJECT_URL}">TempoBench</a> · {esc(generated_at)}',
+    )
 
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)

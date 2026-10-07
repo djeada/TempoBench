@@ -7,8 +7,23 @@ from typing import Optional
 
 import typer
 
-from ...plotting import create_dashboard, save_chart
-from ..app import app, console, load_summary, print_axes, resolve_axes
+from ...plotting import dashboard_charts, save_chart
+from ..app import (
+    BENCH_OPTION,
+    LOG_X_OPTION,
+    LOG_Y_OPTION,
+    STRATEGY_OPTION,
+    ComplexityStrategy,
+    app,
+    console,
+    load_summary,
+    output_option,
+    print_artifact,
+    print_axes,
+    print_heading,
+    resolve_axes,
+    select_bench,
+)
 
 
 @app.command()
@@ -26,25 +41,22 @@ def dashboard(
     color: Optional[str] = typer.Option(
         None, help="Series grouping column (default: inferred)"
     ),
-    output: Path = typer.Option(
-        Path("artifacts/dashboard.html"),
-        "--output",
-        "--out-html",
-        help="Output path for dashboard",
-    ),
+    bench: Optional[str] = BENCH_OPTION,
+    output: Path = output_option("artifacts/dashboard.html", "dashboard"),
     title: str = typer.Option("TempoBench Dashboard", help="Dashboard title"),
-    log_x: bool = typer.Option(False, help="Use log scale for X axis"),
-    log_y: bool = typer.Option(False, help="Use log scale for Y axis"),
+    complexity_strategy: ComplexityStrategy = STRATEGY_OPTION,
+    log_x: Optional[bool] = LOG_X_OPTION,
+    log_y: Optional[bool] = LOG_Y_OPTION,
 ):
     """Generate an interactive dashboard with multiple charts.
 
     [bold]Example:[/bold]
         tembench dashboard --summary artifacts/summary.csv --output artifacts/dashboard.html
     """
-    df = load_summary(summary)
+    df = select_bench(load_summary(summary), bench)
     explicit_axes = x is not None and color is not None
     x, color = resolve_axes(df, x, color)
-    console.print("[bold blue]Generating TempoBench Dashboard...[/bold blue]")
+    print_heading("Dashboard", summary=summary, title=title)
     print_axes(x, color, explicit_axes)
 
     if runs is None:
@@ -53,19 +65,17 @@ def dashboard(
             runs = default_runs
             console.print(f"[dim]Auto-detected runs:[/dim] {runs}")
 
-    dashboard_chart = create_dashboard(
-        summary_csv=summary,
+    charts = dashboard_charts(
+        df,
         runs_jsonl=runs,
         x=x,
         color=color,
-        title=title,
+        bench=bench,
+        complexity_strategy=complexity_strategy.value,
         log_x=log_x,
         log_y=log_y,
     )
-
-    output.parent.mkdir(parents=True, exist_ok=True)
-    save_chart(dashboard_chart, output)
+    save_chart(charts, output, title=title, kind="Dashboard", meta=str(summary))
 
     console.print()
-    console.print(f"[green]✓[/green] Dashboard saved to [bold]{output}[/bold]")
-    console.print(f"[dim]Open in browser: file://{output.absolute()}[/dim]")
+    print_artifact("Dashboard", output)

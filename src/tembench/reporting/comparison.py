@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import html
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import pandas as pd
 
 from .. import PROJECT_URL
 from ..summarize import TIME_COLUMN_PREFERENCE, TIME_SOURCE_COL, grid_columns
 from ..system import get_system_info
-from .formatting import _col_label, _stat_card
-from .resources import render_head_assets, render_theme_toggle
+from .formatting import (
+    _fmt_val,
+    _stat_card,
+    _table_html,
+    column_label,
+    format_number,
+    format_pct,
+)
+from .resources import render_page
 
 
 def _key_columns(current: pd.DataFrame, baseline: pd.DataFrame) -> list[str]:
@@ -32,15 +39,30 @@ MISSING_CURRENT = "missing in current"
 NO_TIMING = "no successful trial"
 SOURCE_CHANGED = "timing source changed"
 
+#: What each problem means, for readers of the comparison report.
+PROBLEM_EXPLANATIONS = {
+    MISSING_CURRENT: "the current summary has no row for this grid point at all — "
+    "the benchmark, or this input size, was not run.",
+    NO_TIMING: "the current run has a row, but no trial succeeded: every one failed, "
+    "timed out or was skipped.",
+    SOURCE_CHANGED: "one side self-reported its duration and the other measured wall "
+    "clock, and there is no wall-clock column to compare on instead.",
+}
+
+#: Suffixes of the per-metric columns `compare_summaries` adds.
+METRIC_SUFFIXES = ("_current", "_baseline", "_delta", "_delta_pct", "_regression")
+
 
 def compare_summaries(
-    current_csv: Path,
-    baseline_csv: Path,
+    current_csv: Path | pd.DataFrame,
+    baseline_csv: Path | pd.DataFrame,
     threshold_pct: float = 5.0,
 ) -> pd.DataFrame:
     """Compare current results against a baseline."""
-    current = pd.read_csv(current_csv)
-    baseline = pd.read_csv(baseline_csv)
+    current = current_csv if isinstance(current_csv, pd.DataFrame) else pd.read_csv(current_csv)
+    baseline = (
+        baseline_csv if isinstance(baseline_csv, pd.DataFrame) else pd.read_csv(baseline_csv)
+    )
 
     group_cols = _key_columns(current, baseline)
     if not group_cols:
@@ -168,108 +190,240 @@ def comparison_tally(comparison_df: pd.DataFrame, threshold_pct: float) -> dict[
     }
 
 
+def comparison_keys(comparison_df: pd.DataFrame) -> list[str]:
+    """The grid columns identifying each row of a comparison."""
+    return [
+        c
+        for c in comparison_df.columns
+        if c not in ("problem", "compared_on") and not str(c).endswith(METRIC_SUFFIXES)
+    ]
+
+
+def decisive_metric(comparison_df: pd.DataFrame) -> str | None:
+    """The one duration column the verdicts rest on."""
+    return next(
+        (c[: -len("_regression")] for c in comparison_df.columns if c.endswith("_regression")),
+        None,
+    )
+
+
+def verdicts(comparison_df: pd.DataFrame, threshold_pct: float) -> pd.DataFrame:
+    """One verdict per row, with the change, current and baseline it rests on.
+
+    Rows that fell back to wall clock (the timing source switched) are judged,
+    and so shown, on wall clock.
+    """
+    metric = decisive_metric(comparison_df)
+    if metric is None:
+        return pd.DataFrame(index=comparison_df.index)
+    pct = comparison_df[f"{metric}_delta_pct"].copy()
+    current = comparison_df[f"{metric}_current"].copy()
+    baseline = comparison_df[f"{metric}_baseline"].copy()
+    if "compared_on" in comparison_df.columns:
+        on_wall = comparison_df["compared_on"] == "wall_ms"
+        for values, suffix in ((pct, "_delta_pct"), (current, "_current"), (baseline, "_baseline")):
+            column = f"wall_ms_median{suffix}"
+            if column in comparison_df.columns:
+                values.update(comparison_df.loc[on_wall, column])
+    problem = comparison_df.get("problem", pd.Series("", index=comparison_df.index)).fillna("")
+    verdict = pd.Series("unchanged", index=comparison_df.index)
+    verdict[pct > threshold_pct] = "slower"
+    verdict[pct < -threshold_pct] = "faster"
+    verdict[baseline.isna()] = "new"
+    verdict[baseline.isna() & current.isna()] = "unmeasured"
+    verdict[problem != ""] = problem[problem != ""]
+    return pd.DataFrame(
+        {"verdict": verdict, "delta_pct": pct, "current": current, "baseline": baseline}
+    )
+
+
+VERDICT_TEXT = {
+    "slower": "Slower",
+    "faster": "Faster",
+    "unchanged": "Unchanged",
+    "new": "New",
+    "unmeasured": "Never measured",
+    MISSING_CURRENT: "Missing",
+    NO_TIMING: "No timing",
+    SOURCE_CHANGED: "Not comparable",
+}
+_VERDICT_CLASS = {
+    "slower": "bad",
+    "faster": "good",
+    "unchanged": "neutral",
+    "new": "neutral",
+    "unmeasured": "neutral",
+}
+#: Verdicts that fail the comparison come first.
+_VERDICT_ORDER = {MISSING_CURRENT: 0, NO_TIMING: 0, SOURCE_CHANGED: 0, "slower": 1}
+_NA = '<span class="na">—</span>'
+
+
+def _verdict_table(
+    comparison_df: pd.DataFrame, verdict: pd.DataFrame, keys: list[str], metric: str
+) -> str:
+    """The headline table: what changed and by how much, worst first.
+
+    A grid column with a single value is named once above the table rather
+    than repeated on every row, so the verdict stays in view on a phone.
+    """
+    name, unit = _split_label(column_label(metric))
+    shared = [k for k in keys if len(keys) > 1 and comparison_df[k].nunique(dropna=False) == 1]
+    keys = [k for k in keys if k not in shared]
+    order = (
+        pd.DataFrame(
+            {
+                "rank": verdict["verdict"].map(_VERDICT_ORDER).fillna(2),
+                "pct": -verdict["delta_pct"].fillna(0),
+            }
+        )
+        .sort_values(["rank", "pct"], kind="stable")
+        .index
+    )
+    esc = html.escape
+    rows = []
+    for i in order:
+        kind = str(verdict.at[i, "verdict"])
+        badge_cls = _VERDICT_CLASS.get(kind, "bad")
+        cells = [f"<td>{_fmt_val(comparison_df.at[i, k], k)}</td>" for k in keys]
+        cells.append(
+            f'<td><span class="badge {badge_cls}">{esc(VERDICT_TEXT.get(kind, kind))}</span></td>'
+        )
+        pct = cast(float, verdict.at[i, "delta_pct"])
+        # Only the decisive change is coloured, and only when it decided.
+        tone = {"slower": " bad", "faster": " good"}.get(kind, "")
+        cells.append(
+            f'<td class="num delta{tone}">{format_pct(pct) if pd.notna(pct) else _NA}</td>'
+        )
+        for column in ("current", "baseline"):
+            value = cast(float, verdict.at[i, column])
+            cells.append(f'<td class="num">{format_number(value) if pd.notna(value) else _NA}</td>')
+        rows.append(f"<tr>{''.join(cells)}</tr>")
+    head = "".join(f"<th>{esc(column_label(k))}</th>" for k in keys)
+    head += (
+        '<th>Verdict</th><th class="num">Change</th>'
+        f'<th class="num">Current{esc(unit)}</th><th class="num">Baseline{esc(unit)}</th>'
+    )
+    scope = "".join(
+        f"; every row has {esc(column_label(k))} = {esc(str(comparison_df[k].iloc[0]))}"
+        for k in shared
+    )
+    return (
+        f'<p class="desc">Judged on {esc(name.lower())}, worst first{scope}.</p>'
+        '<div class="table-wrap"><table class="data-table">'
+        f"<thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+    )
+
+
+def _split_label(text: str) -> tuple[str, str]:
+    """("Median time", " (ms)") from "Median time (ms)"."""
+    if text.endswith(")") and " (" in text:
+        cut = text.rindex(" (")
+        return text[:cut], text[cut:]
+    return text, ""
+
+
+def _problem_section(comparison_df: pd.DataFrame, keys: list[str]) -> str:
+    """The grid points that could not be checked, and why each one fails."""
+    if "problem" not in comparison_df.columns:
+        return ""
+    problems = comparison_df[comparison_df["problem"].fillna("") != ""]
+    if problems.empty:
+        return ""
+    reasons = "".join(
+        f"<li><strong>{html.escape(VERDICT_TEXT[p])}</strong> — "
+        f"{html.escape(PROBLEM_EXPLANATIONS[p])}</li>"
+        for p in sorted(set(problems["problem"]))
+        if p in PROBLEM_EXPLANATIONS
+    )
+    return f"""
+    <section class="section callout bad">
+      <h2>{len(problems)} grid point(s) could not be checked</h2>
+      <p class="desc">The baseline measured these, but the current run produced no
+        comparable timing. Each one fails the comparison: a benchmark that stopped
+        working must not pass as unchanged.</p>
+      <ul class="reasons">{reasons}</ul>
+      {_table_html(problems[keys + ["problem"]])}
+    </section>"""
+
+
 def generate_comparison_report(
     comparison_df: pd.DataFrame,
     title: str = "TempoBench Comparison Report",
     threshold_pct: float = 5.0,
     output_path: Optional[Path] = None,
+    current_name: str | None = None,
+    baseline_name: str | None = None,
 ) -> str:
-    """Generate an HTML comparison report."""
-    sysinfo = get_system_info()
+    """Generate an HTML comparison report.
+
+    It leads with the verdict, then the configurations that decided it; every
+    other metric is folded away below.
+    """
+    # Imported here: the plotting package imports this one for its labels.
+    from ..plotting.comparison import plot_deltas
+    from ..plotting.save import chart_sections
 
     tally = comparison_tally(comparison_df, threshold_pct)
-    total_regressions = tally["regressions"]
-    total_configs = tally["compared"]
-    improvements = tally["improvements"]
+    unmeasured = tally["unmeasured"]
+    slower = tally["regressions"] - unmeasured
+    keys = comparison_keys(comparison_df)
+    metric = decisive_metric(comparison_df)
+    verdict = verdicts(comparison_df, threshold_pct)
 
-    tbl = ['<div class="table-wrap"><table class="data-table">']
-    tbl.append("<thead><tr>")
-    for col in comparison_df.columns:
-        tbl.append(f"<th>{html.escape(_col_label(col))}</th>")
-    tbl.append("</tr></thead><tbody>")
-
-    for _, row in comparison_df.iterrows():
-        tbl.append("<tr>")
-        for col in comparison_df.columns:
-            val = row[col]
-            css = ""
-            if col.endswith("_regression"):
-                if val:
-                    css = ' class="regression"'
-                    val = "⚠ YES"
-                else:
-                    val = "✓ NO"
-            elif col.endswith("_delta_pct") and pd.notna(val):
-                if val > threshold_pct:
-                    css = ' class="regression"'
-                    val = f"+{val:.1f}%"
-                elif val < -threshold_pct:
-                    css = ' class="improvement"'
-                    val = f"{val:.1f}%"
-                else:
-                    val = f"{val:.1f}%"
-            elif isinstance(val, float):
-                val = "—" if pd.isna(val) else f"{val:.3f}"
-            tbl.append(f"<td{css}>{html.escape(str(val))}</td>")
-        tbl.append("</tr>")
-    tbl.append("</tbody></table></div>")
-    table_html = "\n".join(tbl)
-
-    banner_cls = "pass" if total_regressions == 0 else "fail"
-    banner_icon = "✓" if total_regressions == 0 else "⚠"
-    banner_text = (
-        "No regressions detected"
-        if total_regressions == 0
-        else f"{int(total_regressions)} regression{'s' if total_regressions != 1 else ''} detected"
+    failed = tally["regressions"] > 0
+    parts = []
+    if slower:
+        parts.append(f"{slower} slower than the baseline")
+    if unmeasured:
+        parts.append(f"{unmeasured} could not be checked")
+    banner = (
+        f"{tally['regressions']} regression(s) detected: " + " + ".join(parts)
+        if failed
+        else "No regressions detected — every configuration is within the threshold"
     )
-    head_assets = render_head_assets()
-    theme_toggle_html = render_theme_toggle()
+    cards = [
+        _stat_card(str(tally["compared"]), "Compared"),
+        _stat_card(str(slower), "Slower", "err" if slower else "ok"),
+        _stat_card(str(tally["improvements"]), "Faster", "ok" if tally["improvements"] else ""),
+    ]
+    if unmeasured:
+        cards.append(_stat_card(str(unmeasured), "Could not be checked", "err"))
 
-    page = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{html.escape(title)}</title>
-{head_assets}
-</head>
-<body>
-  <div class="container">
+    sections = [
+        f'<div class="status-banner {"fail" if failed else "pass"}" role="status">'
+        f"{html.escape(banner)}</div>",
+        f'<section class="section"><div class="stat-grid">{"".join(cards)}</div></section>',
+        _problem_section(comparison_df, keys),
+    ]
+    specs: list[dict] = []
+    if metric is not None:
+        charts_html, specs = chart_sections(
+            [plot_deltas(comparison_df, verdict, keys, threshold_pct)]
+        )
+        sections.append(charts_html)
+        sections.append(
+            '<section class="section"><h2>Configurations</h2>'
+            f"{_verdict_table(comparison_df, verdict, keys, metric)}</section>"
+        )
+    sections.append(
+        '<section class="section"><details><summary>Every metric, side by side</summary>'
+        f"{_table_html(comparison_df)}</details></section>"
+    )
 
-    <div class="report-header" style="background:linear-gradient(135deg,#7c3aed,#5b21b6)">
-      <h1>{html.escape(title)}</h1>
-      <div class="meta">Regression threshold: {threshold_pct}%</div>
-    </div>
-
-    <div class="status-banner {banner_cls}">{banner_icon} {banner_text}</div>
-
-    <div class="section">
-      <h2><span class="icon">📊</span> Summary</h2>
-      <div class="stat-grid">
-        {_stat_card(str(total_configs), 'Compared', '')}
-        {_stat_card(str(int(total_regressions)), 'Regressions', 'err' if total_regressions > 0 else 'ok')}
-        {_stat_card(str(int(improvements)), 'Improvements', 'ok')}
-      </div>
-    </div>
-
-    <div class="section">
-      <h2><span class="icon">🔍</span> Detailed Comparison</h2>
-      <p class="desc">
-        Cells in <span style="color:var(--c-red);font-weight:600">red</span> indicate regressions;
-        <span style="color:var(--c-green);font-weight:600">green</span> indicates improvements.
-      </p>
-      {table_html}
-    </div>
-
-    <div class="report-footer">
-      <p>Generated by <a href="{PROJECT_URL}">TempoBench</a> · {sysinfo['timestamp']}</p>
-    </div>
-
-  </div>
-
-{theme_toggle_html}
-</body>
-</html>"""
+    esc = html.escape
+    meta = f"Regression threshold {threshold_pct:g}%"
+    if current_name and baseline_name:
+        meta = f"{esc(current_name)} against baseline {esc(baseline_name)} · {meta}"
+    page = render_page(
+        title=title,
+        kind="Comparison",
+        meta=meta,
+        body="\n".join(s for s in sections if s),
+        specs=specs,
+        footer=f'Generated by <a href="{PROJECT_URL}">TempoBench</a> · '
+        f"{esc(str(get_system_info()['timestamp']))}",
+    )
 
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
