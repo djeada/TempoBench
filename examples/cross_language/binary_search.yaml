@@ -1,0 +1,23 @@
+# 65,536 lookups in a sorted array of n elements.  Expected: O(log n).
+# Run from the repository root; see examples/cross_language/README.md.
+benchmarks:
+  - name: cpp
+    build: "mkdir -p examples/cross_language/build && g++ -O2 -std=c++17 -o examples/cross_language/build/algorithms_cpp examples/cross_language/algorithms.cpp"
+    cmd: "examples/cross_language/build/algorithms_cpp --algo binary_search --n {n}"
+  - name: rust
+    build: "mkdir -p examples/cross_language/build && rustc -C opt-level=3 -o examples/cross_language/build/algorithms_rs examples/cross_language/algorithms.rs"
+    cmd: "examples/cross_language/build/algorithms_rs --algo binary_search --n {n}"
+  - name: python
+    cmd: "{python} examples/cross_language/algorithms.py --algo binary_search --n {n}"
+
+grid:
+  n: [8, 32, 128, 512, 2048, 8192, 32768]
+
+limits:
+  timeout_sec: 60
+  warmups: 1
+  repeats: 5
+  # Each program times only its kernel (repeated until 20 ms have been timed)
+  # and prints TEMPOBENCH_MS, so process startup and input generation are not
+  # part of the measurement.
+  metric: reported
