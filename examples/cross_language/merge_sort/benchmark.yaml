@@ -1,0 +1,23 @@
+# Top-down merge sort of n random values.  Expected: O(n log n).
+# Run from the repository root; see examples/cross_language/README.md.
+benchmarks:
+  - name: cpp
+    build: "mkdir -p examples/cross_language/build && g++ -O2 -std=c++17 -o examples/cross_language/build/merge_sort_cpp examples/cross_language/merge_sort/merge_sort.cpp"
+    cmd: "examples/cross_language/build/merge_sort_cpp --n {n}"
+  - name: rust
+    build: "mkdir -p examples/cross_language/build && rustc -C opt-level=3 -o examples/cross_language/build/merge_sort_rs examples/cross_language/merge_sort/merge_sort.rs"
+    cmd: "examples/cross_language/build/merge_sort_rs --n {n}"
+  - name: python
+    cmd: "{python} examples/cross_language/merge_sort/merge_sort.py --n {n}"
+
+grid:
+  n: [1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000]
+
+limits:
+  timeout_sec: 60
+  warmups: 1
+  repeats: 5
+  # Each program times only its kernel (repeated until 20 ms have been timed)
+  # and prints TEMPOBENCH_MS, so process startup and input generation are not
+  # part of the measurement.
+  metric: reported

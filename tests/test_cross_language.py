@@ -12,10 +12,10 @@ import re
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-import yaml
 
 from tembench.config import load_config
 from tembench.runner.reported import parse_reported_ms
@@ -30,31 +30,43 @@ SIZES = {
     "matrix_multiply": [1, 3, 16],
     "held_karp": [1, 2, 5, 9],
 }
-
-
-def _build(tmp_path_factory: pytest.TempPathFactory, compiler: str, args: list[str]) -> Path:
-    if shutil.which(compiler) is None:
-        pytest.skip(f"{compiler} is not installed")
-    out = tmp_path_factory.mktemp("build") / compiler
-    subprocess.run([compiler, *args, "-o", str(out)], check=True, capture_output=True)
-    return out
+COMPILERS = {
+    "cpp": ("g++", ["-O2", "-std=c++17", "-Wall", "-Wextra", "-Werror"], "cpp"),
+    "rust": ("rustc", ["-C", "opt-level=3", "-D", "warnings"], "rs"),
+}
 
 
 @pytest.fixture(scope="module")
-def programs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[str]]:
-    cpp = _build(tmp_path_factory, "g++", ["-O2", "-std=c++17", str(EXAMPLE / "algorithms.cpp")])
-    rust = _build(tmp_path_factory, "rustc", ["-C", "opt-level=3", str(EXAMPLE / "algorithms.rs")])
+def programs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict[str, list[str]]]:
+    """Every implementation, keyed by algorithm then language, ready to run."""
+    for compiler, _, _ in COMPILERS.values():
+        if shutil.which(compiler) is None:
+            pytest.skip(f"{compiler} is not installed")
+    out = tmp_path_factory.mktemp("build")
+
+    def build(algo: str, language: str) -> list[str]:
+        compiler, flags, ext = COMPILERS[language]
+        binary = out / f"{algo}_{language}"
+        source = EXAMPLE / algo / f"{algo}.{ext}"
+        subprocess.run([compiler, *flags, "-o", str(binary), str(source)], check=True, capture_output=True)
+        return [str(binary)]
+
+    jobs = [(algo, language) for algo in SIZES for language in COMPILERS]
+    with ThreadPoolExecutor() as pool:
+        built = dict(zip(jobs, pool.map(lambda job: build(*job), jobs)))
     return {
-        "cpp": [str(cpp)],
-        "rust": [str(rust)],
-        "python": [sys.executable, str(EXAMPLE / "algorithms.py")],
+        algo: {
+            "cpp": built[(algo, "cpp")],
+            "rust": built[(algo, "rust")],
+            "python": [sys.executable, str(EXAMPLE / algo / f"{algo}.py")],
+        }
+        for algo in SIZES
     }
 
 
-def _run(argv: list[str], algo: str, n: int) -> tuple[str, float | None]:
+def _run(argv: list[str], n: int) -> tuple[str, float | None]:
     proc = subprocess.run(
-        [*argv, "--algo", algo, "--n", str(n), "--min-ms", "0"],
-        check=True, capture_output=True, text=True, timeout=60,
+        [*argv, "--n", str(n), "--min-ms", "0"], check=True, capture_output=True, text=True, timeout=60
     )
     match = re.search(r"^CHECKSUM: (\S+)$", proc.stdout, re.MULTILINE)
     assert match, proc.stdout
@@ -64,7 +76,7 @@ def _run(argv: list[str], algo: str, n: int) -> tuple[str, float | None]:
 @pytest.mark.parametrize("algo", sorted(SIZES))
 def test_every_language_computes_the_same_result(programs, algo):
     for n in SIZES[algo]:
-        results = {lang: _run(argv, algo, n) for lang, argv in programs.items()}
+        results = {lang: _run(argv, n) for lang, argv in programs[algo].items()}
         checksums = {lang: checksum for lang, (checksum, _) in results.items()}
         assert len(set(checksums.values())) == 1, f"{algo} n={n}: {checksums}"
         assert all(ms is not None for _, ms in results.values())
@@ -72,16 +84,20 @@ def test_every_language_computes_the_same_result(programs, algo):
 
 def test_known_answers(programs):
     # Spot-check the shared checksum against values worked out by hand.
-    assert _run(programs["cpp"], "divisor_count", 36)[0] == "9"
-    assert _run(programs["cpp"], "divisor_count", 97)[0] == "2"
-    assert _run(programs["cpp"], "held_karp", 1)[0] == "0"
+    assert _run(programs["divisor_count"]["cpp"], 36)[0] == "9"
+    assert _run(programs["divisor_count"]["cpp"], 97)[0] == "2"
+    assert _run(programs["held_karp"]["cpp"], 1)[0] == "0"
 
 
-def test_configs_cover_every_algorithm_in_every_language():
-    configs = sorted(EXAMPLE.glob("*.yaml"))
-    assert {path.stem for path in configs} == set(SIZES)
-    for path in configs:
-        cfg = load_config(path)
+def test_each_algorithm_has_its_own_folder_and_config():
+    folders = sorted(p for p in EXAMPLE.iterdir() if (p / "benchmark.yaml").exists())
+    assert [p.name for p in folders] == sorted(SIZES)
+    for folder in folders:
+        algo = folder.name
+        assert sorted(p.name for p in folder.iterdir() if p.suffix in (".cpp", ".rs", ".py")) == [
+            f"{algo}.cpp", f"{algo}.py", f"{algo}.rs",
+        ]
+        cfg = load_config(folder / "benchmark.yaml")
         assert [bench.name for bench in cfg.benchmarks] == ["cpp", "rust", "python"]
         assert cfg.limits.metric == "reported"
-        assert yaml.safe_load(path.read_text())["benchmarks"][0]["cmd"].endswith(f"--algo {path.stem} --n {{n}}")
+        assert all(f"{algo}/{algo}." in (b.build or b.cmd) for b in cfg.benchmarks)

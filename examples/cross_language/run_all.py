@@ -33,6 +33,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
+from tembench.reel import pretty_model
+
 HERE = Path(__file__).resolve().parent
 EXPECTED = {
     "binary_search": "O(log n)",
@@ -53,6 +55,9 @@ TITLES = {
     "held_karp": "Travelling salesman",
 }
 LANGUAGES = ("cpp", "rust", "python")
+LANGUAGE_NAMES = {"cpp": ("C++", "cpp"), "rust": ("Rust", "rs"), "python": ("Python", "py")}
+#: Where the implementations are browsable once this branch is on main.
+SOURCE_URL = "https://github.com/djeada/TempoBench/blob/main/examples/cross_language"
 CHECKSUM_RE = re.compile(r"^CHECKSUM: (\S+)$", re.MULTILINE)
 CONFIDENCE_STYLE = {"high": "green", "medium": "yellow", "low": "red"}
 
@@ -89,20 +94,36 @@ def checksum_disagreements(runs_path: Path) -> list[str]:
 def run_algorithm(algo: str, out_dir: Path, reel: bool = False) -> dict[str, dict[str, str]]:
     """Run the pipeline for one algorithm; return its fits keyed by language."""
     out = out_dir / algo
-    tembench("run", "--config", HERE / f"{algo}.yaml", "--out-dir", out, "--quiet")
+    tembench("run", "--config", HERE / algo / "benchmark.yaml", "--out-dir", out, "--quiet")
     tembench("summarize", "--runs", out / "runs.jsonl", "--out-csv", out / "summary.csv")
     tembench(
         "plot", "--summary", out / "summary.csv", "--out-html", out / "runtime.html",
         "--export-fits", out / "fits.csv",
     )
     tembench("report", "--summary", out / "summary.csv", "--output", out / "report.html")
+    with (out / "fits.csv").open(encoding="utf-8") as handle:
+        fits = {row["bench"]: row for row in csv.DictReader(handle)}
     if reel:
         tembench(
             "reel", "--summary", out / "summary.csv", "--title", TITLES[algo],
             "--output", out / "reel.mp4", "--poster", out / "reel.png",
         )
-    with (out / "fits.csv").open(encoding="utf-8") as handle:
-        return {row["bench"]: row for row in csv.DictReader(handle)}
+        (out / "caption.txt").write_text(caption(algo, fits), encoding="utf-8")
+    return fits
+
+
+def caption(algo: str, fits: dict[str, dict[str, str]]) -> str:
+    """A description to post with the reel: the result, and the code behind it."""
+    classes = {pretty_model(fits[lang]["model"]) for lang in LANGUAGES if lang in fits}
+    names = ", ".join(LANGUAGE_NAMES[lang][0] for lang in LANGUAGES[:-1]) + f" and {LANGUAGE_NAMES[LANGUAGES[-1]][0]}"
+    if len(classes) == 1:
+        result = f"{TITLES[algo]} in {names}: all three grow as {classes.pop()}."
+    else:
+        result = f"{TITLES[algo]} in {names}: " + ", ".join(
+            f"{LANGUAGE_NAMES[lang][0]} {pretty_model(fits[lang]['model'])}" for lang in LANGUAGES if lang in fits
+        ) + "."
+    links = [f"{LANGUAGE_NAMES[lang][0]}: {SOURCE_URL}/{algo}/{algo}.{LANGUAGE_NAMES[lang][1]}" for lang in LANGUAGES]
+    return "\n".join([result, "", *links, "", "Measured and fitted with TempoBench: https://github.com/djeada/TempoBench", ""])
 
 
 def main() -> int:
@@ -146,7 +167,7 @@ def main() -> int:
     console.print(table)
     console.print(f"Reports: {args.out_dir}/<algorithm>/report.html")
     if args.reels:
-        console.print(f"Reels:   {args.out_dir}/<algorithm>/reel.mp4")
+        console.print(f"Reels:   {args.out_dir}/<algorithm>/reel.mp4, with caption.txt to post alongside")
     if failures:
         console.print("\n[red]Disagreements:[/red]")
         for failure in failures:
