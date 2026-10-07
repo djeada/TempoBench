@@ -16,7 +16,7 @@ A language-agnostic benchmarking CLI that runs any command with parameter sweeps
 - **Interactive charts** — Vega-Lite charts with click-to-toggle legend, crosshair tooltips, and smooth fit curves. Data points shown as discrete markers, fit lines as smooth interpolated curves. Every grid axis besides the input size gets its own series, and grid points where no trial succeeded (or values a log axis cannot show) are left out with a note on the chart rather than drawn as zero.
 - **Rich CLI output** — live progress bars, colored status tables, and system-info display powered by [Rich](https://github.com/Textualize/rich).
 - **Reports & dashboards** — a single-file HTML report that leads with each series' complexity class and confidence, then trial status counts, the runtime chart, complexity fits, the results table, the grid points that produced no measurement, and system information; a dashboard combining the runtime, memory, heatmap and per-size distribution charts; and a comparison report from `compare` that leads with each point's verdict and change against the baseline. Pages follow the system's light or dark theme. Chart data and styling are embedded; the Vega renderer loads from a CDN, so drawing charts needs network access.
-- **Reels** — `tembench reel` turns a finished run into a ~23-second vertical video for sharing or teaching: the measurements arriving in run order, every complexity class tried against them, and the verdict. See [Reels](#reels).
+- **Reels** — `tembench reel` turns a finished run into a ~25-second vertical video with a synthesised soundtrack, for sharing or teaching: the run replayed, every complexity class morphed through, and, for series that share a class, their curves collapsing into one. See [Reels](#reels).
 - **Baseline comparison** — flag regressions against a previous run above a configurable threshold. Rows match on whatever grid columns the two summaries share, so any sweep works.
 - **Reproducibility** — a provenance snapshot records the seed, invocation, and the CPU/memory of the machine that ran the benchmark. Reports read it back, so a report built on your laptop still describes the CI runner that produced the numbers.
 
@@ -163,24 +163,38 @@ pip install -e ".[reel]"     # matplotlib draws the frames; ffmpeg encodes them
 tembench reel --summary artifacts/summary.csv --title "Merge sort" --poster artifacts/reel.png
 ```
 
-<img src="docs/reel.png" width="720" alt="Two reel frames: insertion sort while each class is tried, and merge sort's verdict">
+<img src="docs/reel.png" width="864" alt="Three frames of a reel: a class being tried, the series collapsing onto one curve, and the verdict">
 
-A reel is a 1080×1920 MP4 in three acts:
+`tembench reel` turns a finished run into a ~25-second 1080×1920 MP4 with a
+soundtrack, for sharing or teaching:
 
-1. **Measure.** `runs.jsonl` is replayed in the order the trials actually ran.
-   Each run lands as a dot, and a size's median appears once all its runs are in.
-2. **Fit.** Every complexity class is fitted to the medians in turn, simplest
-   first. Lines tie each median to the curve, so how badly O(1) or O(n) misses
-   can be seen, and a leaderboard ranks the classes by how far they miss.
-3. **Verdict.** The fitted bound, the class, and its confidence, with the
-   caveat behind any rating below high. When the series share a class, the
-   headline says so: "All 3 grow as O(n log n). python is 18× slower than cpp,
-   yet scales the same way."
+1. **Hook.** The surprising fact, posed as a question: *python is 17× slower
+   than cpp. Does it scale worse?*
+2. **Measure.** `runs.jsonl` is replayed in the order the trials actually ran.
+   Each run drops into place, and a size's median lands once all its runs are in.
+3. **Fit.** One curve per series morphs through every complexity class,
+   simplest first. Lines tie each median to the curve, so you can see how badly
+   O(1) or O(√n) misses, and a leaderboard ranks the classes by that miss.
+4. **Verdict.** The bound and the class. When the series share a class, each is
+   divided by its constant factor until all of them lie on one curve, which is
+   what having the same Big-O means. Then they spring back and the result cards
+   rise in, each with its confidence and the reason for any rating below high.
 
-The fits are the same ones as in `fits.csv` and the report. `--speed 1.5`
-makes a ~15-second cut, `--width` sets the resolution, `--poster` also saves the
-final frame (or, with `--no-video`, only that), and `--bench`, `--x` and
-`--color` choose what to show, as for the charts.
+The soundtrack is synthesised from the same timeline, so nothing is sampled or
+licensed:
+- a warm pad moves from rest, through tension while the classes compete, to resolution;
+- each trial lands with a marimba-like pluck pitched by input size, so a sweep is heard climbing;
+- a class that misses badly sounds dull, and one that fits sounds bright;
+- the winner gets an arpeggio;
+- the collapse is a falling glide that lands on a single unison note.
+
+The fits are the same ones as in `fits.csv` and the report. Options:
+- `--speed 1.5` makes a ~15-second cut.
+- `--no-audio` leaves the soundtrack out.
+- `--width` sets the resolution.
+- `--poster` also saves the final frame; with `--no-video`, it saves only that.
+- `--bench`, `--x` and `--color` choose what to show, as for the charts.
+
 `python examples/cross_language/run_all.py merge_sort --reels` benchmarks an
 algorithm in three languages and renders its reel.
 

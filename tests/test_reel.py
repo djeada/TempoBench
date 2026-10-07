@@ -105,7 +105,7 @@ def test_every_moment_of_the_reel_can_be_drawn(reel_module):
     story = build_story(summary.assign(time_source="reported"), "n", "time_ms_median", runs=_runs(summary))
     reel = reel_module.Reel(story, dpi=30)
     acts = [name for name, _ in reel.acts]
-    assert acts == ["intro", "measure", "fit", "verdict", "outro"]
+    assert acts == ["hook", "measure", "fit", "verdict", "outro"]
     seen = set()
     for k in range(int(reel.duration * 4) + 1):
         t = min(k / 4, reel.duration - 1e-6)
@@ -114,6 +114,40 @@ def test_every_moment_of_the_reel_can_be_drawn(reel_module):
     assert seen == set(acts)
     assert "All 3 grow as O(n log n)" in reel.caption.get_text().replace("\n", " ")
     assert "python is 20× slower than cpp" in reel.caption.get_text().replace("\n", " ")
+    assert reel.hook_fact.get_text().replace("\n", " ") == "python is 20× slower than cpp."
+
+
+def test_same_class_series_collapse_onto_one_curve(reel_module):
+    # Divided by their constant factors, the three medians coincide.
+    summary = _summary({"cpp": 1e-5, "rust": 1.1e-5, "python": 2e-4})
+    story = build_story(summary, "n", "time_ms_median")
+    assert story.constant_factors() == pytest.approx([1.0, 20.0, 1.1], rel=0.02)
+    reel = reel_module.Reel(story, dpi=30)
+    verdict = reel.starts[[name for name, _ in reel.acts].index("verdict")]
+    pace = reel.timeline.pace
+    reel.draw(verdict + (reel_module.COLLAPSE_START + reel_module.COLLAPSE_FALL + 0.5) * pace)
+    assert reel.collapse == pytest.approx(1.0)
+    tops = [m.get_offsets()[-1][1] for m in reel.medians]
+    assert max(tops) / min(tops) == pytest.approx(1.0, abs=0.02)
+    reel.draw(reel.duration - 0.01)  # and they spring back for the final frame
+    assert reel.collapse == 0.0
+
+
+def test_different_classes_do_not_collapse():
+    rows = [{"impl": impl, "n": n, "time_ms_median": f(n)}
+            for impl, f in (("quad", lambda n: 1e-6 * n * n), ("lin", lambda n: 1e-3 * n))
+            for n in SIZES]
+    assert build_story(pd.DataFrame(rows), "n", "time_ms_median").constant_factors() is None
+
+
+def test_a_faster_reel_keeps_every_beat(reel_module):
+    story = build_story(_summary(), "n", "time_ms_median")
+    normal = reel_module.Reel(story, dpi=30)
+    quick = reel_module.Reel(story, reel_module.Timeline().faster(2.0), dpi=30)
+    assert quick.duration == pytest.approx(normal.duration / 2)
+    # The hook's question still appears, halfway through the shorter hook.
+    quick.draw(quick.acts[0][1] * 0.6)
+    assert quick.hook_question.get_alpha() > 0.5
 
 
 def test_different_classes_are_grouped_in_the_headline(reel_module):
@@ -159,3 +193,35 @@ def test_cli_encodes_a_vertical_video(tmp_path: Path, reel_module):
     assert result.exit_code == 0, result.output
     data = video.read_bytes()
     assert b"ftyp" in data[:16] and len(data) > 10_000
+    if shutil.which("ffprobe"):
+        import subprocess
+
+        streams = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(video)],
+            capture_output=True, text=True, check=True,
+        ).stdout.split()
+        assert sorted(streams) == ["audio", "video"]
+
+
+# ---- sound ----
+
+
+def test_the_soundtrack_is_as_long_as_the_reel_and_clean(reel_module):
+    import numpy as np
+
+    from tembench.reel.audio import RATE, soundtrack
+
+    summary = _summary()
+    story = build_story(summary.assign(time_source="reported"), "n", "time_ms_median", runs=_runs(summary))
+    reel = reel_module.Reel(story, reel_module.Timeline().faster(4.0), dpi=30)
+    sound = soundtrack(reel)
+    assert sound.shape == (int(reel.duration * RATE), 2)
+    peak = float(np.max(np.abs(sound)))
+    assert 0.8 < peak <= 0.9  # loud enough, never clipping
+    assert float(np.abs(np.diff(sound, axis=0)).max()) < 0.5  # no clicks
+    # Something sounds when the first trial lands: the plucks are on the beat.
+    landing = reel.starts[1] + reel.trial_at[0]
+    before = sound[int((landing - 0.05) * RATE): int(landing * RATE)]
+    after = sound[int(landing * RATE): int((landing + 0.05) * RATE)]
+    assert np.sqrt(np.mean(after**2)) > np.sqrt(np.mean(before**2))
+    assert np.array_equal(sound, soundtrack(reel))  # the same reel, the same sound

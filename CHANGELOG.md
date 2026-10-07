@@ -49,10 +49,15 @@
 
 ### Reels
 
-- `tembench reel` renders a finished run as a short vertical video: the
-  trials replayed in run order, every complexity class fitted in turn with
-  lines showing how far each misses, and the verdict with its confidence.
-  Needs the `reel` extra (matplotlib) and ffmpeg.
+- `tembench reel` renders a finished run as a ~25-second vertical video:
+  - a hook;
+  - the trials replayed in run order;
+  - one curve per series morphing through every complexity class, with lines
+    showing how far each one misses;
+  - a verdict in which series sharing a class collapse onto one curve.
+- It has a soundtrack synthesised in step with the picture: a pad, plucks for
+  trials, and a chime for the winner.
+- It needs the `reel` extra (matplotlib) and ffmpeg.
 
 ### Examples
 

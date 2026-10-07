@@ -59,6 +59,11 @@ class Series:
     formula: str
     #: The reported upper bound, which sits at or above every point.
     bound: tuple[tuple[float, float], ...]
+    bound_C: float = 0.0
+    bound_baseline: float = 0.0
+
+    def bound_at(self, x: float) -> float:
+        return self.bound_C * _basis_functions()[self.model](x) + self.bound_baseline
 
     @property
     def candidates_by_model(self) -> dict[str, Candidate]:
@@ -72,6 +77,8 @@ class Trial:
     series: int
     x: float
     y: float
+    #: How long the whole process took, startup included.
+    wall_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +101,27 @@ class Story:
     @property
     def same_class(self) -> bool:
         return len({s.model for s in self.series}) == 1
+
+    @property
+    def run_seconds(self) -> float:
+        """Wall-clock time the replayed trials took when they were run."""
+        return sum(t.wall_ms or 0.0 for t in self.trials) / 1000.0
+
+    def constant_factors(self) -> list[float] | None:
+        """How many times slower than the fastest series each one is, as a constant.
+
+        Only meaningful when every series has the same class: dividing each by
+        its factor lays them on top of one another, which is what sharing a
+        Big-O class means.  None when the classes differ.
+        """
+        if len(self.series) < 2 or not self.same_class:
+            return None
+        def level(s: Series, ref: Series) -> float:
+            logs = [math.log(y / ref.bound_at(x)) for x, y in s.points if y > 0 and ref.bound_at(x) > 0]
+            return math.exp(sum(logs) / len(logs)) if logs else 1.0
+        levels = [level(s, self.series[0]) for s in self.series]
+        fastest = min(levels)
+        return [v / fastest for v in levels]
 
     def speed_gap(self) -> tuple[Series, Series, float] | None:
         """Slowest and fastest series at the largest size they share, and the ratio.
@@ -227,6 +255,8 @@ def build_story(
             caveats=tuple(c for c in caveats.split(",") if c),
             formula=str(fit["formula"]),
             bound=_curve(model, float(fit["C"]), float(fit["baseline"]) + float(fit["offset"]), samples),
+            bound_C=float(fit["C"]),
+            bound_baseline=float(fit["baseline"]) + float(fit["offset"]),
         ))
 
     trials = _replay(runs, df, by, x, y, groups)
@@ -281,8 +311,9 @@ def _replay(
         reported = rec.get("reported_ms")
         use_reported = source.get((*key, size), "wall") == "reported" and reported is not None
         value = reported if use_reported else rec.get("wall_ms")
+        wall = rec.get("wall_ms")
         if isinstance(value, (int, float)) and value > 0:
-            trials.append(Trial(index[key], size, float(value)))
+            trials.append(Trial(index[key], size, float(value), float(wall) if isinstance(wall, (int, float)) else None))
     if trials:
         return trials
 

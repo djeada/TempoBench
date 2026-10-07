@@ -43,6 +43,7 @@ def reel(
         None, help="Also save the final frame as an image (PNG), e.g. for a thumbnail"
     ),
     no_video: bool = typer.Option(False, "--no-video", help="Only write --poster; skip the video"),
+    no_audio: bool = typer.Option(False, "--no-audio", help="Leave out the synthesised soundtrack"),
     title: str = typer.Option("How does it scale?", help="Headline shown at the top"),
     x: Optional[str] = typer.Option(None, help="Input-size column (default: inferred)"),
     y: Optional[str] = typer.Option(None, help="Duration column (default: time_ms_median)"),
@@ -115,7 +116,7 @@ def reel(
 
             result = render(
                 story, video, width=width, fps=fps, poster=poster,
-                timeline=Timeline().faster(speed), on_frame=on_frame,
+                timeline=Timeline().faster(speed), audio=not no_audio, on_frame=on_frame,
             )
     except RuntimeError as e:
         raise fail(str(e)) from None
