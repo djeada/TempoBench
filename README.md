@@ -10,7 +10,7 @@ A language-agnostic benchmarking CLI that runs any command with parameter sweeps
 - **Parallel execution** — run grid points concurrently with `--workers`/`-j` to cut total benchmark time on multi-core machines.
 - **Metrics collection** — wall-clock time and peak RSS are captured per trial using OS-native tools (`psutil`), with outlier filtering via Tukey fences.
 - **Self-reported timing** — a benchmarked command can print its own inner timing so process startup is excluded from the measurement. See [Measuring the work, not the process](#measuring-the-work-not-the-process).
-- **Complexity estimation** — observed runtimes are fitted against O(1) … O(n² 2ⁿ) models using a multi-layer algorithm (outlier-robust constant detection, log-log slope fallback, step-up OLS with adaptive thresholds, and tail-ratio guards). The best model is selected and overlaid on plots.
+- **Complexity estimation** — observed runtimes are fitted against nine classes from O(1) to O(n² 2ⁿ) using a multi-layer algorithm (outlier-robust constant detection, log-log slope fallback, step-up OLS with adaptive thresholds, and tail-ratio guards). The best model is selected and overlaid on plots.
 - **Fit confidence** — every fitted class is reported with a confidence rating and the caveats behind it, so a class the measurements cannot support is never presented as though they did.
 - **CI-ready exit codes** — a run in which trials failed, or a summary with nothing in it, exits non-zero instead of reporting success.
 - **Interactive charts** — Vega-Lite charts with click-to-toggle legend, crosshair tooltips, and smooth fit curves. Data points shown as discrete markers, fit lines as smooth interpolated curves. Every grid axis besides the input size gets its own series, and grid points where no trial succeeded (or values a log axis cannot show) are left out with a note on the chart rather than drawn as zero.
@@ -33,7 +33,7 @@ For development (adds pytest, ruff, and mypy):
 
 ```bash
 pip install -e ".[dev]"
-pytest          # ~16s
+pytest          # ~25s; compiles the cross-language example if g++ and rustc exist
 ruff check src tests
 mypy
 ```
@@ -49,7 +49,7 @@ benchmarks:
     cmd: "{python} examples/unique_impl.py --n {n} --impl {impl} --seed 42"
 
 grid:
-  n: [10000, 50000, 100000, 500000, 1000000]
+  n: [2000, 5000, 10000, 20000, 50000, 100000, 500000, 1000000]
   impl: ["quadratic", "sort_scan", "hash_set"]
 
 limits:
@@ -94,6 +94,15 @@ tembench plot --summary artifacts/summary.csv --out-html artifacts/runtime.html
 ```bash
 tembench report --summary artifacts/summary.csv
 ```
+
+## Examples
+
+| Example | What it shows |
+|---------|---------------|
+| [`examples/unique_bench.yaml`](examples/unique_bench.yaml) | Three ways to count unique values (O(n²), O(n log n), O(n)) in one sweep; `run_example.sh` runs the whole pipeline on it |
+| [`examples/sort_bench.yaml`](examples/sort_bench.yaml) | Python's sort on random, sorted and reversed input |
+| [`examples/cross_language`](examples/cross_language) | Seven algorithms, one per class, in C++, Rust and Python: checks that every language computes the same result and is fitted the same class |
+| [`examples/top_100_algorithms`](examples/top_100_algorithms) | 100 Python algorithms fitted from deterministic step counts, with wall clock as supporting evidence |
 
 ## CLI Commands
 
@@ -161,7 +170,10 @@ TEMPOBENCH_MS: 12.345
 
 The marker is deliberately trivial so any language can emit it — `:`, `=`, or a
 space all work as the separator, and if it is printed more than once the last
-occurrence wins. `examples/unique_impl.py` shows the pattern.
+occurrence wins. It may appear anywhere in the output, however much is printed
+after it. `examples/unique_impl.py` shows the pattern, and
+[`examples/cross_language`](examples/cross_language) does the same in C++, Rust
+and Python.
 
 Then choose how durations are taken, via `limits.metric`:
 
@@ -203,14 +215,16 @@ two or more give `low`:
 
 | Caveat               | Meaning                                                    |
 |----------------------|------------------------------------------------------------|
-| `few-points`         | Fewer than 4 input sizes — classes cannot be separated.    |
-| `narrow-n-range`     | Input sizes span less than 8×.                             |
+| `few-points`         | Fewer than 4 distinct input sizes — classes cannot be separated. |
+| `narrow-n-range`     | Input sizes span less than 8× (for an exponential class, less than 3 doublings). |
 | `flat-signal`        | Durations span less than 2× — nothing grew enough to fit.  |
 | `wide-exponent-ci`   | The bootstrap exponent interval is wider than 0.5.         |
 | `overhead-dominated` | Over 50% of the largest reading is constant overhead.      |
-| `ambiguous-class`    | Another class fits almost as well (ΔAIC < 6). The textbook 2 is too lenient for a seven-way contest on a handful of points. |
-| `exponent-mismatch`  | The bootstrap exponent interval lies outside the range the class produces, and fitted overhead cannot explain it — typically cache effects bending the curve between two classes. |
+| `ambiguous-class`    | Another class fits almost as well: ΔAIC under 6, or under 10 with fewer than 6 input sizes, where the noise itself is poorly estimated. The textbook 2 is too lenient for a nine-way contest on a handful of points. |
+| `poor-fit`           | Even the best class misses the readings by over 20% on average — growth faster than any class, or a curve with a kink. |
+| `exponent-mismatch`  | The bootstrap exponent interval lies outside the range the class produces — typically cache effects bending the curve between two classes. |
 | `single-point-growth`| The series is flat except for the largest input size — one reading decides the class. |
+| `constant-class`     | The fit is `O(1)`. A flat curve is also what a sweep that never reached large enough inputs looks like, so `O(1)` is never rated `high`. |
 | `outlier-dropped`    | `O(1)` only after discarding one outlying reading (never the largest input). |
 | `non-positive-timings` | Some durations are zero or negative — below timer resolution; they are left out of the exponent estimate. |
 | `thin-samples`       | Fewer than 3 trials per input size.                        |
@@ -218,10 +232,9 @@ two or more give `low`:
 
 Confidence is advisory: it never changes the fitted bound, only how much you
 should trust the label on it. Rows with a missing or non-finite size or duration
-are ignored, and a series left with fewer than two points is not fitted. Note
-that an `O(1)` result is never rated `high` —
-a flat curve is also what a sweep that never reached interesting input sizes
-looks like, and the two cannot be told apart from the data.
+are ignored, and a series left with fewer than two points is not fitted.
+`fits.csv` carries the caveats twice: as prose in `confidence_notes`, and as
+the codes above in `caveats`, for scripts and CI checks.
 
 ### Measure on a quiet machine
 
@@ -240,6 +253,13 @@ but measures around n^1.24 from 10⁴ to 5·10⁶ elements, because the memory
 hierarchy, not the hash table, sets the pace at the top of that range. This is a
 real property of the code on that hardware and TempoBench reports it faithfully;
 it is not a substitute for analysing the algorithm.
+
+[`examples/cross_language`](examples/cross_language) shows this from the other
+side: binary search over 4 million elements measures as O(√n) in C++, Rust and
+Python alike, and as O(log n) in all three once the array fits in cache. Its
+README lists the other ways a benchmark ends up measuring the machine instead
+of the algorithm: a branch predictor that has memorised the input, or a
+hardware fast path for small operands.
 
 If you want the operation count instead, have the command count operations and
 emit that number through the marker. Nothing downstream inspects the units, so
@@ -308,14 +328,20 @@ All output is written to the `--out-dir` directory (default `artifacts/`):
 | `provenance.json` | JSON   | Seed, worker count, CLI invocation, working directory, and the benchmark machine's platform/CPU/memory |
 | `summary.csv`     | CSV    | Median/mean/p10/p90 per grid point, for both the canonical (`time_ms_*`) and wall-clock (`wall_ms_*`) durations |
 | `runtime.html`    | HTML   | Vega-Lite runtime chart with complexity overlay |
-| `fits.csv`        | CSV    | Best-fit model, runner-up and margin, exponent CI, coefficients, RSS, and confidence per series |
+| `fits.csv`        | CSV    | Best-fit model, runner-up and margin, exponent CI, coefficients, residuals, and confidence with its caveats per series |
 | `report.html`     | HTML   | Full report with charts, tables, and system info |
 
 ## Complexity Fitting
 
-Candidate models: **O(1)**, **O(log n)**, **O(√n)**, **O(n)**, **O(n log n)**, **O(n²)**, **O(n³)**, **O(n² 2ⁿ)**.
+Candidate models: **O(1)**, **O(log n)**, **O(√n)**, **O(n)**, **O(n log n)**, **O(n²)**, **O(n³)**, **O(2ⁿ)**, **O(n² 2ⁿ)**. The two
+exponential classes are only considered when the largest input is at most 64:
+nothing exponential finishes far beyond that.
 
-Every class is fitted as `T(n) = C·f(n) + baseline`:
+Every class is fitted as `T(n) = C·f(n) + baseline`. The baseline is the
+constant overhead. It may dip below zero by at most a quarter of the smallest
+reading, enough to absorb a cost per element that rises a little with n (small
+inputs staying in cache), but not enough for a slower class to pass for a
+faster one: `C·n − b` imitates `n log n` over a finite range.
 
 1. **Constant detection** — the series is `O(1)` when max/min stays within 1.15×,
    or within 1.5× with no monotone trend; one outlying reading may be discarded
@@ -332,6 +358,9 @@ Every class is fitted as `T(n) = C·f(n) + baseline`:
    two largest sizes, net of the fitted baseline, is closer to it. A class the
    data clearly rejects is never chosen.
 5. **Confidence assessment** — rate how well the measurements support the chosen class; see [Fit Confidence](#fit-confidence).
+   The empirical exponent and its bootstrap interval are measured net of the
+   fitted baseline, so they describe the work: O(n²) plus startup measures
+   n^2.0, not the n^0.5 its raw log-log slope shows.
 
 The selected fit is scaled up by the smallest factor that makes it a proper **upper bound** — the fit line sits at or above every observed data point, as Big-O semantics require, while staying as tight at small n as at large. The plot shows the Big-O class (e.g. `O(n log n)`) on the curve, and the chart subtitle lists the concrete bound formula of each series (e.g. `T(n) ≤ 5.36e-05·n·log(n) + 55.7`), which is also in the curve's tooltip. Use `--complexity-strategy strict` to surface an empirical exponent band like `O(n^1.08±0.07)` when the confidence interval overlaps a neighboring class boundary.
 
@@ -359,7 +388,10 @@ benchmarks:
     env: { MY_VAR: "1" }        # optional environment variables
 
 grid:
-  n: [100, 1000, 10000]         # parameter grid; all combinations are swept
+  n: [100, 1000, 10000]         # parameter grid; all combinations are swept.
+                                # Values are numbers or strings; names used by
+                                # trial records (status, cmd, metric, …) are
+                                # reserved
 
 limits:
   timeout_sec: 30               # per-trial timeout (SIGTERM to the process
@@ -375,7 +407,9 @@ limits:
   growth_key: "n"               # grid key treated as the input size
   metric: auto                  # auto | wall | reported — see "Measuring the work"
 
-pin_cpu: 0                      # optional CPU affinity (Linux, sequential only)
+pin_cpu: 0                      # optional: run the benchmark on this core alone
+                                # (Linux, sequential only); TempoBench keeps
+                                # its own threads off it
 ```
 
 ### Commands
