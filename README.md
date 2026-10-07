@@ -2,7 +2,12 @@
 
 A language-agnostic benchmarking CLI that runs any command with parameter sweeps, records timing and memory, estimates Big-O complexity with an honest confidence rating, and generates reports, all from a single YAML config.
 
-<img width="1206" height="795" alt="Screenshot from 2026-02-12 21-53-22" src="https://github.com/user-attachments/assets/26c75949-de62-482d-8cfd-3d27db35eb95" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/report-dark.png">
+  <img src="docs/report-light.png" width="960" alt="A TempoBench report: merge sort in C++, Rust and Python, each fitted O(n log n) at high confidence, with the runtime chart on log axes">
+</picture>
+
+<sub>A report from <a href="examples/cross_language">examples/cross_language</a>: the same merge sort in three languages, 17× apart in speed, all O(n log n).</sub>
 
 ## Features
 
@@ -163,7 +168,7 @@ pip install -e ".[reel]"     # matplotlib draws the frames; ffmpeg encodes them
 tembench reel --summary artifacts/summary.csv --title "Merge sort" --poster artifacts/reel.png
 ```
 
-<img src="docs/reel.png" width="864" alt="Three frames of a reel: a class being tried, the series collapsing onto one curve, and the verdict">
+<img src="docs/reel.png" width="888" alt="Three frames of a reel for merge sort: O(√n) being tried and missing, the three languages collapsing onto one curve once their constant factors are divided out, and the verdict cards">
 
 `tembench reel` turns a finished run into a ~25-second 1080×1920 MP4 with a
 soundtrack, for sharing or teaching:
