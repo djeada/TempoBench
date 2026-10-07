@@ -15,6 +15,7 @@ from .commands import (  # noqa: F401  (import-for-side-effects)
     inspect,
     memory,
     plot,
+    reel,
     report,
     run,
     summarize,

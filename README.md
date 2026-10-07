@@ -16,6 +16,7 @@ A language-agnostic benchmarking CLI that runs any command with parameter sweeps
 - **Interactive charts** — Vega-Lite charts with click-to-toggle legend, crosshair tooltips, and smooth fit curves. Data points shown as discrete markers, fit lines as smooth interpolated curves. Every grid axis besides the input size gets its own series, and grid points where no trial succeeded (or values a log axis cannot show) are left out with a note on the chart rather than drawn as zero.
 - **Rich CLI output** — live progress bars, colored status tables, and system-info display powered by [Rich](https://github.com/Textualize/rich).
 - **Reports & dashboards** — a single-file HTML report that leads with each series' complexity class and confidence, then trial status counts, the runtime chart, complexity fits, the results table, the grid points that produced no measurement, and system information; a dashboard combining the runtime, memory, heatmap and per-size distribution charts; and a comparison report from `compare` that leads with each point's verdict and change against the baseline. Pages follow the system's light or dark theme. Chart data and styling are embedded; the Vega renderer loads from a CDN, so drawing charts needs network access.
+- **Reels** — `tembench reel` turns a finished run into a ~23-second vertical video for sharing or teaching: the measurements arriving in run order, every complexity class tried against them, and the verdict. See [Reels](#reels).
 - **Baseline comparison** — flag regressions against a previous run above a configurable threshold. Rows match on whatever grid columns the two summaries share, so any sweep works.
 - **Reproducibility** — a provenance snapshot records the seed, invocation, and the CPU/memory of the machine that ran the benchmark. Reports read it back, so a report built on your laptop still describes the CI runner that produced the numbers.
 
@@ -29,7 +30,10 @@ cd TempoBench
 pip install -e .
 ```
 
-For development (adds pytest, ruff, and mypy):
+For `tembench reel`, add the `reel` extra (`pip install -e ".[reel]"`) and have
+`ffmpeg` on the PATH.
+
+For development (adds pytest, ruff, mypy, and matplotlib):
 
 ```bash
 pip install -e ".[dev]"
@@ -118,6 +122,7 @@ tembench report --summary artifacts/summary.csv
 | `inspect`     | Preview recent runs in a table                             |
 | `memory`      | Generate a memory-usage chart                              |
 | `heatmap`     | Generate a performance heatmap                             |
+| `reel`        | Render a short vertical video of the run and its fit       |
 | `sysinfo`     | Display system information for reproducibility             |
 
 Run `tembench --help` or `tembench <command> --help` for full option details. Every chart and report command takes its output path as `--output` or `--out-html`, and `plot`, `dashboard`, `memory` and `heatmap` take `--bench` to chart one benchmark.
@@ -150,6 +155,34 @@ Axes  x = vertices, series = algorithm (inferred; override with --x / --color)
 
 Pass `--x` and `--color` to override the inference; `compare` likewise joins on
 whatever grid columns the two summaries share.
+
+## Reels
+
+```bash
+pip install -e ".[reel]"     # matplotlib draws the frames; ffmpeg encodes them
+tembench reel --summary artifacts/summary.csv --title "Merge sort" --poster artifacts/reel.png
+```
+
+<img src="docs/reel.png" width="720" alt="Two reel frames: insertion sort while each class is tried, and merge sort's verdict">
+
+A reel is a 1080×1920 MP4 in three acts:
+
+1. **Measure.** `runs.jsonl` is replayed in the order the trials actually ran.
+   Each run lands as a dot, and a size's median appears once all its runs are in.
+2. **Fit.** Every complexity class is fitted to the medians in turn, simplest
+   first. Lines tie each median to the curve, so how badly O(1) or O(n) misses
+   can be seen, and a leaderboard ranks the classes by how far they miss.
+3. **Verdict.** The fitted bound, the class, and its confidence, with the
+   caveat behind any rating below high. When the series share a class, the
+   headline says so: "All 3 grow as O(n log n). python is 18× slower than cpp,
+   yet scales the same way."
+
+The fits are the same ones as in `fits.csv` and the report. `--speed 1.5`
+makes a ~15-second cut, `--width` sets the resolution, `--poster` also saves the
+final frame (or, with `--no-video`, only that), and `--bench`, `--x` and
+`--color` choose what to show, as for the charts.
+`python examples/cross_language/run_all.py merge_sort --reels` benchmarks an
+algorithm in three languages and renders its reel.
 
 ## Measuring the work, not the process
 

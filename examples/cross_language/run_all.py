@@ -14,6 +14,7 @@ class must not change.  Run from the repository root:
     python examples/cross_language/run_all.py                 # all seven
     python examples/cross_language/run_all.py merge_sort      # just one
     python examples/cross_language/run_all.py --out-dir artifacts/xl
+    python examples/cross_language/run_all.py merge_sort --reels  # + a video
 
 Exits non-zero when a checksum or a class disagrees.
 """
@@ -41,6 +42,15 @@ EXPECTED = {
     "insertion_sort": "O(n²)",
     "matrix_multiply": "O(n³)",
     "held_karp": "O(n² 2^n)",
+}
+TITLES = {
+    "binary_search": "Binary search",
+    "divisor_count": "Counting divisors",
+    "max_subarray": "Maximum subarray",
+    "merge_sort": "Merge sort",
+    "insertion_sort": "Insertion sort",
+    "matrix_multiply": "Matrix multiplication",
+    "held_karp": "Travelling salesman",
 }
 LANGUAGES = ("cpp", "rust", "python")
 CHECKSUM_RE = re.compile(r"^CHECKSUM: (\S+)$", re.MULTILINE)
@@ -76,7 +86,7 @@ def checksum_disagreements(runs_path: Path) -> list[str]:
     return problems
 
 
-def run_algorithm(algo: str, out_dir: Path) -> dict[str, dict[str, str]]:
+def run_algorithm(algo: str, out_dir: Path, reel: bool = False) -> dict[str, dict[str, str]]:
     """Run the pipeline for one algorithm; return its fits keyed by language."""
     out = out_dir / algo
     tembench("run", "--config", HERE / f"{algo}.yaml", "--out-dir", out, "--quiet")
@@ -86,6 +96,11 @@ def run_algorithm(algo: str, out_dir: Path) -> dict[str, dict[str, str]]:
         "--export-fits", out / "fits.csv",
     )
     tembench("report", "--summary", out / "summary.csv", "--output", out / "report.html")
+    if reel:
+        tembench(
+            "reel", "--summary", out / "summary.csv", "--title", TITLES[algo],
+            "--output", out / "reel.mp4", "--poster", out / "reel.png",
+        )
     with (out / "fits.csv").open(encoding="utf-8") as handle:
         return {row["bench"]: row for row in csv.DictReader(handle)}
 
@@ -95,6 +110,8 @@ def main() -> int:
     parser.add_argument("algorithms", nargs="*", choices=list(EXPECTED), metavar="ALGO",
                         help=f"algorithms to run (default: all of {', '.join(EXPECTED)})")
     parser.add_argument("--out-dir", type=Path, default=Path("artifacts/cross_language"))
+    parser.add_argument("--reels", action="store_true",
+                        help="also render a short video per algorithm (needs matplotlib and ffmpeg)")
     args = parser.parse_args()
 
     table = Table(title="Cross-language complexity", title_style="bold")
@@ -107,7 +124,7 @@ def main() -> int:
     failures: list[str] = []
     for algo in args.algorithms or list(EXPECTED):
         with console.status(f"Benchmarking {algo} in {', '.join(LANGUAGES)}"):
-            fits = run_algorithm(algo, args.out_dir)
+            fits = run_algorithm(algo, args.out_dir, args.reels)
         expected = EXPECTED[algo]
         cells = []
         for language in LANGUAGES:
@@ -128,6 +145,8 @@ def main() -> int:
 
     console.print(table)
     console.print(f"Reports: {args.out_dir}/<algorithm>/report.html")
+    if args.reels:
+        console.print(f"Reels:   {args.out_dir}/<algorithm>/reel.mp4")
     if failures:
         console.print("\n[red]Disagreements:[/red]")
         for failure in failures:

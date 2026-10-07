@@ -47,11 +47,18 @@
   `--bench` works on `dashboard`, `memory` and `heatmap`.  Asking for a
   metric or axis that is not there is an error instead of a blank chart.
 
+### Reels
+
+- `tembench reel` renders a finished run as a short vertical video: the
+  trials replayed in run order, every complexity class fitted in turn with
+  lines showing how far each misses, and the verdict with its confidence.
+  Needs the `reel` extra (matplotlib) and ffmpeg.
+
 ### Examples
 
 - `examples/cross_language`: seven algorithms, one per class, in C++, Rust
   and Python, with a script that checks every language computes the same
-  result and is fitted the same class.
+  result and is fitted the same class.  `--reels` renders a video for each.
 - `unique_bench.yaml` sweeps smaller sizes, so its quadratic implementation
   has enough points to fit.
 

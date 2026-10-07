@@ -34,7 +34,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# `tembench reel` draws its frames with matplotlib (and encodes with ffmpeg).
+reel = ["matplotlib>=3.7"]
 dev = [
+  "matplotlib>=3.7",
   "mypy>=1.10",
   "pandas-stubs>=2.2",
   "pytest>=7.0",
